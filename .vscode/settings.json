@@ -1,0 +1,13 @@
+{
+  "files.associations": {
+    "libnetfilter_queue.h": "c"
+  },
+  "cSpell.words": [
+    "BINDTODEVICE",
+    "dnat",
+    "ethhdr",
+    "iphdr",
+    "Netcat",
+    "snat"
+  ]
+}
