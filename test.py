@@ -1,21 +1,7 @@
-import socket
-import time
+from scapy.all import *
 
-HOST = "127.0.0.1"  # The server's hostname or IP address
-PORT = 8080  # The port used by the server
+packets = rdpcap ("wifi.pcap")
 
-with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-    s.connect((HOST, PORT))
-    print("CONNECTED")
-    while True:
-        for i in range(5):
-            s.send("data".encode(encoding="utf-8"))
-            data = s.recv(2048)
-            # if data != "None".encode(encoding="utf-8"):
-            print(data)
-            time.sleep(1)
-        for i in range(1):
-            s.send("comms".encode(encoding="utf-8"))
-            data = s.recv(2048)
-
-print(f"Received {data!r}")
+for p in packets:
+    if p.haslayer(ESP):
+        print(p[ESP].spi)

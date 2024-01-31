@@ -28,8 +28,8 @@ class Netcat : public Middle
               std::cin >> s;
               int32_t length = htonl (s.length ());
 
-              write (this->core_fd, &length, sizeof (length));
-              write (this->core_fd, &s[0], s.length () * sizeof (char));
+              write (this->core_control_fd, &length, sizeof (length));
+              write (this->core_data_fd, &s[0], s.length () * sizeof (char));
             }
         }
 
@@ -42,13 +42,13 @@ class Netcat : public Middle
               int32_t length;
               char s[2048];
 
-              read (this->core_fd, &length, sizeof (length));
+              read (this->core_control_fd, &length, sizeof (length));
               length = ntohl (length);
 
               if (length == 0)
                 continue;
 
-              int n = read (this->core_fd, s, length * sizeof (char));
+              int n = read (this->core_data_fd, s, length * sizeof (char));
               if (n<= 0)
                 {
                   this->logger.print ("read failed", RED, VERBOSE_HIGH);

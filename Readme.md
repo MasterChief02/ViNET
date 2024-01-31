@@ -19,3 +19,4 @@ SERVER
 <!-- iptables -t mangle -A INPUT -i rmnet_data2 -j NFQUEUE --queue-num 10
 iptables -t mangle -A INPUT -i wlan0 -j NFQUEUE --queue-num 10 -->
 iptables -t nat -A POSTROUTING -o wlan0 -j MASQUERADE
+iptables -A OUTPUT -o wlan0 -p icmp --icmp-type 3 -j REJECT

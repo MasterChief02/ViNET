@@ -171,10 +171,10 @@ class Router : public Middle
               std::cout << "SOURCE IP     : " << src_ip << std::endl;
               std::cout << "DESTINATION IP: " << dst_ip << std::endl;
 
-              int32_t length = packet_size - sizeof (struct ethhdr);
+              uint32_t length = packet_size - sizeof (struct ethhdr);
               length = htonl (length);
-              write (this->core_fd, &length, sizeof (length));
-              write (this->core_fd, packet + sizeof (struct ethhdr), packet_size - sizeof (struct ethhdr));
+              write (this->core_control_fd, &length, sizeof (length));
+              write (this->core_data_fd, packet + sizeof (struct ethhdr), packet_size - sizeof (struct ethhdr));
             }
         }
 
@@ -184,25 +184,36 @@ class Router : public Middle
         {
           while (1)
             {
-              int32_t packet_size;
+              uint32_t packet_size;
               unsigned char packet [MAX_PACKET_SIZE];
 
-              read (this->core_fd, &packet_size, sizeof (packet_size));
+              int n = read (this->core_control_fd, &packet_size, sizeof (packet_size));
+              if (n <= 0)
+                {
+                  perror ("Failed to read len");
+                }
               packet_size = ntohl (packet_size);
+              std::cout << packet_size << std::endl;
 
               if (packet_size == 0)
                 continue;
 
-              int n = read (this->core_fd, packet, packet_size * sizeof (char));
-              if (n<= 0)
+              n = read (this->core_data_fd, packet, packet_size * sizeof (char));
+              if (n <= 0)
                 continue;
+
+              std::cout << packet_size << std::endl;
 
               // Check for ICMP, UDP, TCP
               struct iphdr *ip_header = (struct iphdr *) packet;
               if ((ip_header->protocol != IPPROTO_ICMP) &&
                   (ip_header->protocol != IPPROTO_UDP) &&
                   (ip_header->protocol != IPPROTO_TCP))
-                continue;
+                {
+                  std::cout << ip_header->protocol << std::endl;
+                  continue;
+                }
+
 
               // SNAT at server side
               if (this->is_server)

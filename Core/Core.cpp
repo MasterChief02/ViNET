@@ -29,32 +29,44 @@ class Core
 
       char *self_ip;
 
-      int middle_fd;
+      int middle_control_fd;
+      int middle_data_fd;
       int middle_port;
       std::string middle_ip;
 
       Logger logger;
 
-
-
       void setup_middle ()
+        {
+          this->setup_socket (&this->middle_control_fd, this->middle_port, true);
+          sleep (1);
+          this->setup_socket (&this->middle_data_fd, this->middle_port+1, false);
+        }
+
+
+
+      void setup_socket (int *fd, int port, bool set_timeout)
         {
           struct sockaddr_in middle_socket;
           memset (&middle_socket, 0, sizeof (middle_socket));
-          middle_fd = socket (AF_INET, SOCK_STREAM, 0);
+          *fd = socket (AF_INET, SOCK_STREAM, 0);
           middle_socket.sin_family = AF_INET;
-          middle_socket.sin_port = htons (this->middle_port);
+          middle_socket.sin_port = htons (port);
           middle_socket.sin_addr.s_addr = inet_addr (this->middle_ip.c_str ());
 
-          struct timeval timeout;
-          memset (&timeout, 0, sizeof (timeout));
-          timeout.tv_sec = 0;
-          timeout.tv_usec = 1000;
+          if (set_timeout)
+            {
+              struct timeval timeout;
+              memset (&timeout, 0, sizeof (timeout));
+              timeout.tv_sec = 0;
+              timeout.tv_usec = 1000;
 
-          setsockopt(middle_fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(struct timeval));
-          setsockopt(middle_fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(struct timeval));
+              setsockopt(*fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(struct timeval));
+              // setsockopt(*fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(struct timeval));
+            }
 
-          if (connect (middle_fd, (struct sockaddr *) &middle_socket, sizeof (middle_socket)) < 0)
+
+          if (connect (*fd, (struct sockaddr *) &middle_socket, sizeof (middle_socket)) < 0)
             {
               perror ("Failed to connect to middle");
               exit (EXIT_FAILURE);
@@ -131,6 +143,10 @@ class Core
           char *payload = (char *) (pkt + sizeof (struct ip6_hdr) + sizeof (struct udphdr));
           int payload_length = udp_header->len;
 
+          if (payload_length < 500)
+            goto set_verdict;
+
+
           // Retrieving source IP
           char src_ip [INET6_ADDRSTRLEN];
           inet_ntop (AF_INET6, &(ip_header->ip6_src), src_ip, INET6_ADDRSTRLEN);
@@ -146,14 +162,14 @@ class Core
               this->callback_receive (payload, payload_length);
             }
 
+          set_verdict:
+            int verdict = nfq_set_verdict (q_handle, packet_id, NF_ACCEPT, len, pkt);
+            if (verdict == -1) {
+                perror ("Error in nfq_set_verdict()");
+                exit (EXIT_FAILURE);
+            }
 
-          int verdict = nfq_set_verdict (q_handle, packet_id, NF_ACCEPT, len, pkt);
-          if (verdict == -1) {
-              perror ("Error in nfq_set_verdict()");
-              exit (EXIT_FAILURE);
-          }
-
-          return verdict;
+            return verdict;
         }
 
 
@@ -235,11 +251,11 @@ class Core
                           char *payload,
                           int payload_length)
         {
-          int data_length;
+          uint32_t data_length;
           char data[2048];
           int n;
 
-          n = read (this->middle_fd, &data_length, sizeof (data_length));
+          n = read (this->middle_control_fd, &data_length, sizeof (data_length));
           if (n <= 0)
             {
               // this->logger.print ("TIMEOUT", RED, VERBOSE_HIGH);
@@ -248,12 +264,14 @@ class Core
 
           data_length = ntohl (data_length);
 
-          n = read (this->middle_fd, &data, data_length * sizeof (char));
-          if (n <= 0)
+          n = read (this->middle_data_fd, &data, data_length * sizeof (char));
+          if (n <= 0 || n!= data_length)
             {
               this->logger.print ("Unable to read payload", RED, VERBOSE_HIGH);
+              std::cout << data_length << " " << n << " " << payload_length << std::endl;
               return;
             }
+
 
           this->logger.print ("Sending data", GREEN, VERBOSE_HIGH);
 
@@ -270,7 +288,7 @@ class Core
           {
             char data[2048];
             int data_length;
-            int32_t n;
+            uint32_t n;
 
             if (!this->signature_verify (payload, payload_length))
               return;
@@ -281,8 +299,15 @@ class Core
             data_length = this->data_get (payload, data, payload_length);
             n = htonl (data_length);
 
-            write (this->middle_fd, &n, sizeof (n));
-            write (this->middle_fd, data, data_length * sizeof (char));
+            if (write (this->middle_control_fd, &n, sizeof (n)) <= 0)
+              {
+                perror ("Failed to write len");
+              }
+
+            if (write (this->middle_data_fd, data, data_length * sizeof (char)) <= 0)
+              {
+                perror ("Failed to write data");
+              }
           }
 
 

@@ -16,6 +16,13 @@ class Middle
     private:
       void setup_core ()
         {
+          this->setup_socket (&this->core_control_fd, this->port);
+          this->setup_socket (&this->core_data_fd, this->port + 1);
+        }
+
+
+      void setup_socket (int *fd, int port)
+        {
           int socket_fd;
 
           struct sockaddr_in address;
@@ -24,7 +31,7 @@ class Middle
           // Specifying the address
           address.sin_family = AF_INET;
           address.sin_addr.s_addr = INADDR_ANY;
-          address.sin_port = htons(this->port);
+          address.sin_port = htons(port);
 
           // Creating socket file descriptor
           if ((socket_fd = socket(AF_INET, SOCK_STREAM, 0)) < 0)
@@ -49,7 +56,7 @@ class Middle
           this->logger.print("Waiting for connection", WHITE, VERBOSE_LOW);
 
           // Connecting to core
-          if ((this->core_fd = accept(socket_fd, (struct sockaddr*)&address, &addrlen)) < 0)
+          if ((*fd = accept(socket_fd, (struct sockaddr*)&address, &addrlen)) < 0)
             {
               perror("Could not connect to core");
               exit(EXIT_FAILURE);
@@ -61,7 +68,7 @@ class Middle
 
     protected:
       int port;
-      int core_fd;
+      int core_data_fd, core_control_fd;
       Logger logger;
 
 
