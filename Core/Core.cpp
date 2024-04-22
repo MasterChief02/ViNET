@@ -143,7 +143,12 @@ class Core
           char *payload = (char *) (pkt + sizeof (struct ip6_hdr) + sizeof (struct udphdr));
           int payload_length = udp_header->len;
 
-          if (payload_length < 500)
+          payload_length = ntohs(payload_length);
+
+          // std::cout << payload_length << "\n";
+          // std::cout << ntohs(payload_length) << "\n";
+
+          if (payload_length < 1100)
             goto set_verdict;
 
 
@@ -206,13 +211,25 @@ class Core
         {
           char signature[] = "ViNET";
           int signature_length = strlen (signature);
-          int signature_size = signature_length * sizeof (char);
+          int32_t signature_size = signature_length * sizeof (char);
 
-          int32_t metadata = htonl (data_length);
-          int metadata_size = sizeof (metadata);
+          int32_t metadata_1 = htonl (data_length);
+          int32_t metadata_2 = htonl (payload_length);
+          int metadata_1_size = sizeof (metadata_1);
+          int metadata_2_size = sizeof (metadata_2);
+          int metadata_size = metadata_1_size + metadata_2_size;
 
-          memcpy (payload + signature_size, &metadata, metadata_size);
+          int total_data_size = signature_size + metadata_size + ( payload_length * sizeof(char) ) ;
+
+          // if (total_data_size > payload_length){
+          //   std::cout << total_data_size << " " << payload_length;
+          //   this->logger.print("CAUTION!", RED, VERBOSE_HIGH);
+          // }
+
+          memcpy (payload + signature_size, &metadata_1, metadata_1_size);
+          memcpy (payload + signature_size + metadata_1_size, &metadata_2, metadata_2_size);
           memcpy (payload + signature_size + metadata_size, data, data_length * sizeof (char));
+
         }
 
 
@@ -225,14 +242,24 @@ class Core
           int signature_length = strlen (signature);
           int signature_size = signature_length * sizeof (char);
 
-          int32_t metadata;
-          int metadata_size = sizeof (metadata);
+          int32_t metadata_1;
+          int metadata_1_size = sizeof (metadata_1);
+          int32_t metadata_2;
+          int metadata_2_size = sizeof (metadata_2);
 
-          memcpy (&metadata, payload + signature_size, metadata_size);
-          metadata = ntohl (metadata);
 
-          memcpy (data, payload + signature_size + metadata_size, metadata);
-          return metadata;
+          memcpy (&metadata_1, payload + signature_size, metadata_1_size);
+          metadata_1 = ntohl (metadata_1);
+
+          memcpy (&metadata_2, payload + signature_size + metadata_1_size, metadata_1_size);
+          metadata_2 = ntohl (metadata_2);
+
+          if (metadata_2 != payload_length) {
+            this->logger.print("CONCATENATED PACKET!", YELLOW, VERBOSE_HIGH);
+          }
+
+          memcpy (data, payload + signature_size + metadata_1_size + metadata_2_size, metadata_1);
+          return metadata_1;
         }
 
 
