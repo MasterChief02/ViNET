@@ -189,7 +189,10 @@ class Core
           char *payload = (char *) (pkt + sizeof (struct ip6_hdr) + sizeof (struct udphdr));
           int payload_length = ntohs (udp_header->len);
 
-          if (payload_length < 800)//check_available_tcp_packet_len())
+          int signature_size = 5 * sizeof (char);
+          int metadata_size = sizeof (int32_t);
+
+          if (payload_length < check_available_tcp_packet_len() + signature_size + metadata_size)
             goto set_verdict;
 
           this->callback_send (ip_header, udp_header, payload, payload_length);
@@ -226,8 +229,8 @@ class Core
           char *payload = (char *) (pkt + sizeof (struct ip6_hdr) + sizeof (struct udphdr));
           int payload_length = ntohs (udp_header->len);
 
-          if (payload_length < 800)
-            goto set_verdict;
+          // if (payload_length < 800)
+          //   goto set_verdict;
 
           this->callback_receive (payload, payload_length);
           if (payload_length > 2000)
@@ -324,7 +327,9 @@ class Core
         int n;
         uint32_t data_length;
         n = recv (this->middle_control_fd, &data_length, sizeof (data_length), MSG_PEEK);
+        // std::cout << "Before ntohl: " << data_length << std::endl;
         data_length = ntohl (data_length);
+        // std::cout << "After ntohl: " << data_length << std::endl;
         return data_length;
       }
 
