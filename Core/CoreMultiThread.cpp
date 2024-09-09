@@ -191,8 +191,9 @@ class Core
 
           int signature_size = 5 * sizeof (char);
           int metadata_size = sizeof (int32_t);
+          int safe_padding = 10;
 
-          if (payload_length < check_available_tcp_packet_len() + signature_size + metadata_size)
+          if (payload_length < check_available_tcp_packet_len() + signature_size + metadata_size + safe_padding)
             goto set_verdict;
 
           this->callback_send (ip_header, udp_header, payload, payload_length);
