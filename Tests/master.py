@@ -18,6 +18,8 @@ from termcolor import cprint
 from time import sleep
 from datetime import datetime
 
+
+
 class Logger ():
     log_file = open ("text.log", "a")
 
@@ -71,7 +73,7 @@ class Device:
         Logger.log(f"Interface: {self.rmnet_interface}")
 
     def set_ipv6_rules(self):
-        self.run_command(f"ip6tables -w -t mangle -A INPUT -i {self.rmnet_interface} -p UDP -j NFQUEUE --queue-num 5")
+        self.run_command(f"ip6tables -w -t mangle -A INPUT -i {self.rmnet_interface} -p UDP -j NFQUEUE --queue-num 6")
         self.run_command(f"ip6tables -w -t mangle -A OUTPUT -o {self.rmnet_interface} -p UDP -j NFQUEUE --queue-num 5")
 
     def set_ipv4_rules(self):
@@ -160,10 +162,14 @@ class Device:
         self.run_command("pkill -9 core", sleep_time=0.5)
         self.run_command("pkill -9 router")
 
-def main_loop():
+
+
+def main_loop(test_func, **kwargs):
     vinet = Device(0, "ZD2222DX7R")
     server = Device(1, "ZF6527C3LT")
+    server.restart()
     vinet.restart()
+    sleep(20)
     server.get_ifaces()
     try:
         vinet.setup()
@@ -174,8 +180,8 @@ def main_loop():
         server.set_ipv6_rules()
 
         subnet = vinet.get_first_3_octets()
-        vinet.setup_middle(subnet + ".17") # last octet is always same for the device
-        server.setup_middle(subnet + ".17")
+        vinet.setup_middle(subnet + ".152") # last octet is always same for the device
+        server.setup_middle(subnet + ".152")
         sleep(5)
         vinet.setup_core()
         server.setup_core()
@@ -188,20 +194,16 @@ def main_loop():
         sleep(5)
         # do a simple ping test to google.com
         # subprocess.run(["ping", "-c", "10", "8.8.8.8" ])
-        while True:
-            sleep(1)
+        test_func(**kwargs)
 
         server.end_call()
         vinet.exit()
         server.exit()
-
 
     finally:
         server.end_call()
         vinet.exit()
         server.exit()
-
-
 
 if __name__ == "__main__":
     main_loop()
