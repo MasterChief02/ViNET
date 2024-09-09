@@ -226,8 +226,8 @@ class Core
           char *payload = (char *) (pkt + sizeof (struct ip6_hdr) + sizeof (struct udphdr));
           int payload_length = ntohs (udp_header->len);
 
-          // if (payload_length < 800)
-          //   goto set_verdict;
+          if (payload_length < 800)
+            goto set_verdict;
 
           this->callback_receive (payload, payload_length);
           if (payload_length > 2000)
