@@ -16,4 +16,7 @@ client = tweepy.Client(
 response = client.create_tweet(
     text="This Tweet was Tweeted using Tweepy and Twitter API v2!"
 )
+
+print(response)
+
 print(f"https://x.com/user/status/{response.data['id']}")
