@@ -27,7 +27,7 @@ env.bak/
 *.dylib
 
 # Logs and databases
-*.log
+# *.log
 *.sqlite3
 *.db
 

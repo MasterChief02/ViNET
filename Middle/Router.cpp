@@ -173,8 +173,8 @@ class Router : public Middle
 
               uint32_t length = packet_size - sizeof (struct ethhdr);
               length = htonl (length);
-              write (this->core_control_fd, &length, sizeof (length));
               write (this->core_data_fd, packet + sizeof (struct ethhdr), packet_size - sizeof (struct ethhdr));
+              write (this->core_control_fd, &length, sizeof (length));
             }
         }
 

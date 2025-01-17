@@ -1,2 +1,6 @@
 Testing/Twitter/auth.py
 .venv
+sec_analysis/
+sec_analysis/pcap/pcap_client/*.pcap
+sec_analysis/pcap/pcaps_server/*.pcap
+
