@@ -80,6 +80,7 @@ class Core
               memset (&timeout, 0, sizeof (timeout));
               timeout.tv_sec = 0;
               timeout.tv_usec = 1000;
+              
 
               setsockopt(*fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(struct timeval));
               // setsockopt(*fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(struct timeval));
