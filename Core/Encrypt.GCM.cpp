@@ -21,7 +21,6 @@
 #include <openssl/rand.h>
 #include <openssl/err.h>
 
-
 #include "../Common/Logger.h"
 #include "Checksum.h"
 
@@ -48,6 +47,13 @@ class Core
       std::string middle_ip;
 
       Logger logger;
+
+      const unsigned char* key = (const unsigned char*)"1234567890abcdef";
+      int tag_size = 16 * sizeof(unsigned char);
+      int iv_size = 12 * sizeof(unsigned char);
+
+      EVP_CIPHER_CTX* e_ctx = EVP_CIPHER_CTX_new();
+      EVP_CIPHER_CTX* d_ctx = EVP_CIPHER_CTX_new();
 
       void setup_middle ()
         {
@@ -131,11 +137,6 @@ class Core
           this->handle_recv = nfq_open ();
           if (!this->handle_recv)
             {
-              perror ("Error in nfq_open()");
-              exit (EXIT_FAILURE);
-            }
-
-          if (nfq_unbind_pf (this->handle_recv, AF_INET6) < 0)
             {
               perror ("Error in nfq_unbind_pf()");
               exit (EXIT_FAILURE);
@@ -153,11 +154,6 @@ class Core
               perror ("Error in nfq_create_queue()");
               exit (EXIT_FAILURE);
             }
-
-          if (nfq_set_mode (this->q_handle_recv, NFQNL_COPY_PACKET, 0xffff) < 0)
-            {
-              perror ("Error in nfq_set_mode()");
-              exit (EXIT_FAILURE);
             }
 
           this->core_fd_recv = nfq_fd (this->handle_recv);
@@ -191,15 +187,15 @@ class Core
           struct udphdr *udp_header = (struct udphdr *) (pkt + sizeof (struct ip6_hdr));
 
           // Retrieving application payload
-          char *payload = (char *) (pkt + sizeof (struct ip6_hdr) + sizeof (struct udphdr));
-          int payload_length = ntohs (udp_header->len);
+          unsigned char *payload = (pkt + sizeof (struct ip6_hdr) + sizeof (struct udphdr));
+          uint32_t payload_length = ntohs (udp_header->len);
 
-          int iv_size = 16;
-          int signature_size = 5 * sizeof (char);
-          int metadata_size = sizeof (int32_t);
+          // int signature_size = 5 * sizeof (char);
+          // int metadata_size = sizeof (int32_t);
           int safe_padding = 10;
+          int metadata_size = sizeof (int32_t) + this->tag_size * sizeof(unsigned char) + this->iv_size * sizeof(unsigned char);
 
-          if (payload_length < check_available_tcp_packet_len() + iv_size + signature_size + metadata_size + safe_padding)
+          if (payload_length < check_available_tcp_packet_len() + metadata_size + safe_padding)
             goto set_verdict;
 
           this->callback_send (ip_header, udp_header, payload, payload_length);
@@ -233,16 +229,16 @@ class Core
           struct udphdr *udp_header = (struct udphdr *) (pkt + sizeof (struct ip6_hdr));
 
           // Retrieving application payload
-          char *payload = (char *) (pkt + sizeof (struct ip6_hdr) + sizeof (struct udphdr));
-          int payload_length = ntohs (udp_header->len);
+          unsigned char *payload = (pkt + sizeof (struct ip6_hdr) + sizeof (struct udphdr));
+          uint32_t payload_length = ntohs (  udp_header->len);
 
-          int iv_size = 16;
-          int signature_size = 5 * sizeof (char);
-          int metadata_size = sizeof (int32_t);
           int safe_padding = 10;
+          int metadata_size = sizeof (int32_t) + this->tag_size * sizeof(unsigned char) + this->iv_size * sizeof(unsigned char);
 
-          if (payload_length < iv_size + signature_size + metadata_size + safe_padding)
+          // std::cout << "Recieved Payload Length" << payload_length << "\n";
+          if (payload_length <= safe_padding + metadata_size)
             goto set_verdict;
+
 
           this->callback_receive (payload, payload_length);
           if (payload_length > 2000)
@@ -259,72 +255,95 @@ class Core
             return verdict;
         }
 
+
+      void data_encrypt_add(unsigned char *payload, 
+                            unsigned char *data, 
+                            uint32_t payload_length, 
+                            uint32_t data_length) 
+      {
+        
+        unsigned char tag[this->tag_size];
+        unsigned char iv[this->iv_size];
+
+        RAND_bytes(iv, this->iv_size);
+
+        uint32_t metadata = htonl (data_length);
+        int metadata_size = sizeof(uint32_t);
+
+        unsigned char* plaintext = payload + this->iv_size + this->tag_size;
+
+        memcpy(plaintext, &metadata, metadata_size);
+        memcpy(plaintext + metadata_size, data, data_length);
+
+        unsigned char ciphertext[payload_length - this->iv_size - this->tag_size];
+
+        int len=0, ciphertext_len=0;
+
+        EVP_CIPHER_CTX_reset(this->e_ctx);
+        EVP_EncryptInit_ex(this->e_ctx, EVP_aes_128_gcm(), NULL, this->key, iv);
+        EVP_EncryptUpdate(this->e_ctx, ciphertext, &len, plaintext, (payload_length - this->tag_size - this->iv_size));
+        ciphertext_len = len;
+        EVP_EncryptFinal_ex(this->e_ctx, ciphertext + len, &len);
+        ciphertext_len += len;
+        EVP_CIPHER_CTX_ctrl(this->e_ctx, EVP_CTRL_GCM_GET_TAG,  this->tag_size, tag);
+
+        memcpy(payload, iv, this->iv_size);
+        memcpy(payload + this->iv_size, tag, this->tag_size);
+        memcpy(payload + this->iv_size + this->tag_size, ciphertext, ciphertext_len);
+
+        if (payload_length - this->iv_size - this->tag_size == ciphertext_len) {
+          this->logger.print("Encryption Length Match", YELLOW, VERBOSE_VERY_HIGH);
+        }
+
+      }
+
+      uint32_t data_decrypt_get(unsigned char *payload, 
+                              unsigned char *data, 
+                              uint32_t payload_length) 
       
+      {
 
+        unsigned char tag[this->tag_size];
+        unsigned char iv[this->iv_size];
 
+        unsigned char* ciphertext = payload + this->iv_size + this->tag_size;
+        int ciphertext_len = payload_length - this->iv_size - this->tag_size;
 
+        memcpy(iv, payload, this->iv_size);
+        memcpy(tag, payload + this->iv_size, this->tag_size);
 
-      void signature_add (char *payload,
-                          int payload_length)
-        {
-          char signature[] = "ViNET";
-          int signature_length = strlen (signature);
+        uint32_t metadata;
+        int metadata_size = sizeof(uint32_t);
+        
+        unsigned char plaintext[payload_length - this->iv_size - this->tag_size];
 
-          memcpy (payload, signature, signature_length * sizeof (char));
-        }
+        int plaintext_len=0, len=0;
 
+        EVP_CIPHER_CTX_reset(this->d_ctx);
+        EVP_DecryptInit_ex(this->d_ctx, EVP_aes_128_gcm(), NULL, this->key, iv);
+        EVP_DecryptUpdate(this->d_ctx, plaintext, &len, ciphertext, (payload_length - this->tag_size - this->iv_size));
+        plaintext_len = len;
+        EVP_CIPHER_CTX_ctrl(this->d_ctx, EVP_CTRL_GCM_SET_TAG, this->tag_size, tag);
+        int n = EVP_DecryptFinal_ex(this->d_ctx, plaintext + len, &len);
+        plaintext_len += len;
 
+        if (n > 0) {
+          
+          memcpy(&metadata, plaintext, metadata_size);
+          std::cout << "Metadata before Decryption: " << metadata << "\n";
+          metadata = ntohl(metadata);
+          std::cout << "Metadata after Decryption: " << metadata << "\n";
 
-      bool signature_verify (char *payload,
-                             int payload_length)
-        {
-          char signature[] = "ViNET";
-          int signature_length = strlen (signature);
+          memcpy(data, plaintext + metadata_size, metadata);
 
-          char data [signature_length+1];
-          memcpy (data, payload, signature_length * sizeof (char));
+          this->logger.print("Decryption success", GREEN, VERBOSE_HIGH);
 
-          return (strcmp (signature, data) == 0);
-        }
-
-
-
-      void data_add (char *payload,
-                     char *data,
-                     int payload_length,
-                     int data_length)
-        {
-          char signature[] = "ViNET";
-          int signature_length = strlen (signature);
-          int signature_size = signature_length * sizeof (char);
-
-          int32_t metadata = htonl (data_length);
-          int metadata_size = sizeof (metadata);
-
-          memcpy (payload + signature_size, &metadata, metadata_size);
-          memcpy (payload + signature_size + metadata_size, data, data_length * sizeof (char));
-        }
-
-
-
-      int32_t data_get (char *payload,
-                     char *data,
-                     int payload_length)
-        {
-          char signature[] = "ViNET";
-          int signature_length = strlen (signature);
-          int signature_size = signature_length * sizeof (char);
-
-          int32_t metadata;
-          int metadata_size = sizeof (metadata);
-
-          memcpy (&metadata, payload + signature_size, metadata_size);
-          metadata = ntohl (metadata);
-
-          memcpy (data, payload + signature_size + metadata_size, metadata);
           return metadata;
         }
 
+        return 0;
+
+      }
 
 
       void update_checksum(ip6_hdr* ip_header,
@@ -345,62 +364,21 @@ class Core
         return data_length;
       }
 
-      void encrypt_payload(char* payload, int payload_length) {
-
-        const unsigned char *KEY = (const unsigned char*)"1234567890abcdef";
-        
-        const int IV_SIZE = 16;
-
-        unsigned char IV[IV_SIZE];
-        RAND_bytes(IV, IV_SIZE);
-
-        unsigned char* plaintext = (unsigned char*) payload;
-        int plaintext_length = payload_length - IV_SIZE;
-
-        unsigned char ciphertext[plaintext_length];
-
-        EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
-        EVP_EncryptInit_ex(ctx, EVP_aes_128_ctr(), NULL, KEY, IV);
-
-        int len;
-
-        EVP_EncryptUpdate(ctx, ciphertext, &len, plaintext, plaintext_length);
-
-        int ciphertext_length = len;
-
-        EVP_EncryptFinal_ex(ctx, ciphertext + len, &len);
-
-        ciphertext_length += len;
-
-        if (ciphertext_length != plaintext_length) {
-          this->logger.print("ENCRYPTION FAILED", RED, VERBOSE_VERY_HIGH);
-          return;
-        }
-
-        this->logger.print("ENCRYPTION SUCCESS", GREEN, VERBOSE_VERY_HIGH);
-
-        memcpy(payload, IV, IV_SIZE);
-        memcpy(payload + IV_SIZE, ciphertext, ciphertext_length);
-
-        EVP_CIPHER_CTX_free(ctx);
-
-      }
-
 
 
       void callback_send (ip6_hdr *ip_header,
                           udphdr *udp_header,
-                          char *payload,
-                          int payload_length)
+                          unsigned char *payload,
+                          uint32_t payload_length)
         {
           uint32_t data_length;
-          char data[2048];
+          unsigned char data[2048];
           int n;
 
           n = read (this->middle_control_fd, &data_length, sizeof (data_length));
           if (n <= 0)
             {
-              // this->logger.print ("TIMEOUT", RED, VERBOSE_HIGH);
+              // this->logger.print ("TIMEOUT", RED, VERBOSE_HIGH);f
               return;
             }
 
@@ -416,75 +394,29 @@ class Core
 
 
           this->logger.print ("Sending data", GREEN, VERBOSE_HIGH);
-          std::cout << payload_length << std::endl;
 
-          this->signature_add (payload, payload_length);
-          this->data_add (payload, data, payload_length, data_length);
-          this->encrypt_payload(payload, payload_length);
+          this->data_encrypt_add (payload, data, payload_length, data_length);
           this->update_checksum (ip_header, udp_header);
 
         }
 
 
-        bool decrypt_payload(char *payload, int payload_length) {
 
-          const unsigned char *KEY = (const unsigned char*)"1234567890abcdef";
-          
-          const int IV_SIZE = 16;
-
-          unsigned char IV[IV_SIZE];
-          memcpy(IV, payload, IV_SIZE);
-
-          unsigned char *ciphertext = (unsigned char *) payload + IV_SIZE;
-          int ciphertext_length = payload_length - IV_SIZE;
-
-          unsigned char plaintext[ciphertext_length];
-
-          EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
-          EVP_DecryptInit_ex(ctx, EVP_aes_128_ctr(), NULL, KEY, IV);
-
-          int len;
-
-          EVP_DecryptUpdate(ctx, plaintext, &len, ciphertext, ciphertext_length);
-
-          int plaintext_length = len;
-
-          EVP_DecryptFinal_ex(ctx, plaintext + len, &len);
-
-          plaintext_length += len;
-
-          if (ciphertext_length != plaintext_length) {
-            this->logger.print("DECRYPTION FAILED", RED, VERBOSE_VERY_HIGH);
-            return false;
-          }
-
-          if (!signature_verify((char *) plaintext, plaintext_length)) return false;
-
-          
-          memcpy(payload, plaintext, plaintext_length);
-          return true;
-
-        }
-
-
-
-        void callback_receive (char *payload,
-                               int payload_length)
+        void callback_receive (unsigned char *payload,
+                               uint32_t payload_length)
           {
-            char data[2048];
-            int data_length;
+            unsigned char data[2048];
+            uint32_t data_length;
             uint32_t n;
 
+            data_length = this->data_decrypt_get(payload, data, payload_length);
 
-
-            if (!this->decrypt_payload (payload, payload_length))
+            if (data_length == 0)
               return;
 
             this->logger.print ("Got some data", BLUE, VERBOSE_HIGH);
             std::cout << payload_length << std::endl;
 
-
-            data_length = this->data_get (payload, data, payload_length);
             n = htonl (data_length);
 
             if (write (this->middle_control_fd, &n, sizeof (n)) <= 0)
