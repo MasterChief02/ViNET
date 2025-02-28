@@ -16,10 +16,13 @@
 #include <netinet/ip6.h>
 #include <netinet/udp.h>
 #include <thread>
+#include <fcntl.h>
+#include <sys/ioctl.h>
 #include <openssl/aes.h>
 #include <openssl/evp.h>
 #include <openssl/rand.h>
 #include <openssl/err.h>
+#include <cstdlib>
 
 
 #include "../Common/Logger.h"
@@ -47,7 +50,14 @@ class Core
       int middle_port;
       std::string middle_ip;
 
+      double alpha;
+
       Logger logger;
+
+      EVP_CIPHER_CTX *ectx = EVP_CIPHER_CTX_new();
+      EVP_CIPHER_CTX *dctx = EVP_CIPHER_CTX_new();
+
+
 
       void setup_middle ()
         {
@@ -67,23 +77,19 @@ class Core
           middle_socket.sin_port = htons (port);
           middle_socket.sin_addr.s_addr = inet_addr (this->middle_ip.c_str ());
 
-          if (set_timeout)
-            {
-              struct timeval timeout;
-              memset (&timeout, 0, sizeof (timeout));
-              timeout.tv_sec = 0;
-              timeout.tv_usec = 1000;
-
-              setsockopt(*fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(struct timeval));
-              // setsockopt(*fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(struct timeval));
-            }
-
-
           if (connect (*fd, (struct sockaddr *) &middle_socket, sizeof (middle_socket)) < 0)
             {
               perror ("Failed to connect to middle");
               exit (EXIT_FAILURE);
             }
+
+          if (set_timeout)
+            {
+              int flags = fcntl(*fd, F_GETFL, 0);
+              fcntl(*fd, F_SETFL, flags | O_NONBLOCK);
+            }
+
+
           this->logger.print ("Connected to middle", GREEN, VERBOSE_LOW);
         }
 
@@ -200,6 +206,11 @@ class Core
           int metadata_size = sizeof (int32_t);
           // int safe_padding = 13;
 
+          double random = drand48 ();
+          if (random > this->alpha)
+            goto set_verdict;
+
+
           if (payload_length < check_available_tcp_packet_len() + iv_size + signature_size + metadata_size || payload_length < 200)
             goto set_verdict;
 
@@ -261,9 +272,6 @@ class Core
 
             return verdict;
         }
-
-      
-
 
 
 
@@ -339,13 +347,23 @@ class Core
 
 
       uint32_t check_available_tcp_packet_len() {
-        int n;
-        uint32_t data_length;
-        n = recv (this->middle_control_fd, &data_length, sizeof (data_length), MSG_PEEK);
-        // std::cout << "Before ntohl: " << data_length << std::endl;
-        data_length = ntohl (data_length);
-        // std::cout << "After ntohl: " << data_length << std::endl;
-        return data_length;
+
+        int bytes_available = 0;
+        ioctl(this->middle_control_fd, FIONREAD, &bytes_available);
+
+        if (bytes_available >= sizeof(uint32_t)) {
+          int n;
+          uint32_t data_length;
+          n = recv (this->middle_control_fd, &data_length, sizeof (data_length), MSG_PEEK);
+          // std::cout << "Before ntohl: " << data_length << std::endl;
+          data_length = ntohl (data_length);
+          // std::cout << "After ntohl: " << data_length << std::endl;
+          return data_length;
+        }
+
+        return INT16_MAX;
+
+        
       }
 
       void encrypt_payload(char* payload, int payload_length) {
@@ -362,16 +380,16 @@ class Core
 
         unsigned char ciphertext[plaintext_length];
 
-        EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
-        EVP_EncryptInit_ex(ctx, EVP_aes_128_ctr(), NULL, KEY, IV);
+        // EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
+        EVP_EncryptInit_ex(this->ectx, EVP_aes_128_ctr(), NULL, KEY, IV);
 
         int len;
 
-        EVP_EncryptUpdate(ctx, ciphertext, &len, plaintext, plaintext_length);
+        EVP_EncryptUpdate(this->ectx, ciphertext, &len, plaintext, plaintext_length);
 
         int ciphertext_length = len;
 
-        EVP_EncryptFinal_ex(ctx, ciphertext + len, &len);
+        EVP_EncryptFinal_ex(this->ectx, ciphertext + len, &len);
 
         ciphertext_length += len;
 
@@ -385,7 +403,7 @@ class Core
         memcpy(payload, IV, IV_SIZE);
         memcpy(payload + IV_SIZE, ciphertext, ciphertext_length);
 
-        EVP_CIPHER_CTX_free(ctx);
+        EVP_CIPHER_CTX_reset(this->ectx);
 
       }
 
@@ -443,16 +461,16 @@ class Core
 
           unsigned char plaintext[ciphertext_length];
 
-          EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
-          EVP_DecryptInit_ex(ctx, EVP_aes_128_ctr(), NULL, KEY, IV);
+          // EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
+          EVP_DecryptInit_ex(this->dctx, EVP_aes_128_ctr(), NULL, KEY, IV);
 
           int len;
 
-          EVP_DecryptUpdate(ctx, plaintext, &len, ciphertext, ciphertext_length);
+          EVP_DecryptUpdate(this->dctx, plaintext, &len, ciphertext, ciphertext_length);
 
           int plaintext_length = len;
 
-          EVP_DecryptFinal_ex(ctx, plaintext + len, &len);
+          EVP_DecryptFinal_ex(this->dctx, plaintext + len, &len);
 
           plaintext_length += len;
 
@@ -465,6 +483,8 @@ class Core
 
           
           memcpy(payload, plaintext, plaintext_length);
+          EVP_CIPHER_CTX_reset(this->dctx);
+
           return true;
 
         }
@@ -504,13 +524,14 @@ class Core
 
 
     public:
-      Core (char *self_ip)
+      Core (char *self_ip, double alpha)
         {
           this->self_ip = self_ip;
           this->queue_num_send = 5;
           this->queue_num_recv = 6;
           this->middle_port = 8080;
           this->middle_ip = "127.0.0.1";
+          this->alpha = (double) alpha;
 
           this->setup ();
         }
@@ -579,16 +600,23 @@ class Core
 
 int main (int argc, char *argv[])
   {
+
     if (argc == 2)
       {
-        Core core (argv[1]);
+        Core core (argv[1], 1.0);
+        core.run ();
+      }
+
+    else if (argc == 3)
+      {
+        Core core (argv[1], atof (argv[2]));
         core.run ();
       }
 
     else
       {
-        std::cout << "Usage:" << std::endl << "   ./core <self_ip>" << std::endl;
+        std::cout << "Usage:" << std::endl << "   ./core <self_ip> <alpha>" << std::endl;
       }
 
     return 0;
-  }
+  } 

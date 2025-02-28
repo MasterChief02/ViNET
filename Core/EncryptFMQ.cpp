@@ -16,6 +16,7 @@
 #include <netinet/ip6.h>
 #include <netinet/udp.h>
 #include <thread>
+#include <fcntl.h>
 #include <openssl/aes.h>
 #include <openssl/evp.h>
 #include <openssl/rand.h>
@@ -67,23 +68,18 @@ class Core
           middle_socket.sin_port = htons (port);
           middle_socket.sin_addr.s_addr = inet_addr (this->middle_ip.c_str ());
 
-          if (set_timeout)
-            {
-              struct timeval timeout;
-              memset (&timeout, 0, sizeof (timeout));
-              timeout.tv_sec = 0;
-              timeout.tv_usec = 1000;
-
-              setsockopt(*fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(struct timeval));
-              // setsockopt(*fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(struct timeval));
-            }
-
-
           if (connect (*fd, (struct sockaddr *) &middle_socket, sizeof (middle_socket)) < 0)
             {
               perror ("Failed to connect to middle");
               exit (EXIT_FAILURE);
             }
+
+          if (set_timeout)
+            {
+                fcntl(*fd, F_SETFL, O_NONBLOCK);
+            }
+
+
           this->logger.print ("Connected to middle", GREEN, VERBOSE_LOW);
         }
 
@@ -191,7 +187,7 @@ class Core
           struct udphdr *udp_header = (struct udphdr *) (pkt + sizeof (struct ip6_hdr));
 
           // Retrieving application payload
-          int rtp_header_size = 20;
+          int rtp_header_size = 13;
           char *payload = (char *) (pkt + sizeof (struct ip6_hdr) + sizeof (struct udphdr)) + rtp_header_size;
           int payload_length = ntohs (udp_header->len) - rtp_header_size;
 
@@ -234,7 +230,7 @@ class Core
           struct udphdr *udp_header = (struct udphdr *) (pkt + sizeof (struct ip6_hdr));
 
           // Retrieving application payload
-          int rtp_header_size = 20;
+          int rtp_header_size = 13;
 
           char *payload = (char *) (pkt + sizeof (struct ip6_hdr) + sizeof (struct udphdr)) + rtp_header_size;
           int payload_length = ntohs (udp_header->len) - rtp_header_size;
@@ -591,4 +587,4 @@ int main (int argc, char *argv[])
       }
 
     return 0;
-  }
+  } 
