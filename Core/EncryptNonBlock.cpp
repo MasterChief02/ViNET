@@ -197,19 +197,17 @@ class Core
           struct udphdr *udp_header = (struct udphdr *) (pkt + sizeof (struct ip6_hdr));
 
           // Retrieving application payload
-          int rtp_header_size = 20;
+          int rtp_header_size = 14;
+          
           char *payload = (char *) (pkt + sizeof (struct ip6_hdr) + sizeof (struct udphdr)) + rtp_header_size;
           int payload_length = ntohs (udp_header->len) - rtp_header_size;
-
           int iv_size = 16;
           int signature_size = 5 * sizeof (char);
           int metadata_size = sizeof (int32_t);
-          // int safe_padding = 13;
-
-          double random = drand48 ();
-          if (random > this->alpha)
+          
+          if (ntohs(udp_header->len) < 200) {
             goto set_verdict;
-
+          }
 
           if (payload_length < check_available_tcp_packet_len() + iv_size + signature_size + metadata_size || payload_length < 200)
             goto set_verdict;
@@ -245,7 +243,7 @@ class Core
           struct udphdr *udp_header = (struct udphdr *) (pkt + sizeof (struct ip6_hdr));
 
           // Retrieving application payload
-          int rtp_header_size = 20;
+          int rtp_header_size = 14;
 
           char *payload = (char *) (pkt + sizeof (struct ip6_hdr) + sizeof (struct udphdr)) + rtp_header_size;
           int payload_length = ntohs (udp_header->len) - rtp_header_size;
@@ -253,7 +251,10 @@ class Core
           int iv_size = 16;
           int signature_size = 5 * sizeof (char);
           int metadata_size = sizeof (int32_t);
-          // int safe_padding = 13
+          
+          if (ntohs(udp_header->len) < 200) {
+            goto set_verdict;
+          }
 
           if (payload_length < iv_size + signature_size + metadata_size || payload_length < 200)
             goto set_verdict;
@@ -264,6 +265,7 @@ class Core
 
 
           set_verdict:
+            this->update_checksum (ip_header, udp_header);
             int verdict = nfq_set_verdict (q_handle, packet_id, NF_ACCEPT, len, pkt);
             if (verdict == -1) {
                 perror ("Error in nfq_set_verdict()");
@@ -380,7 +382,6 @@ class Core
 
         unsigned char ciphertext[plaintext_length];
 
-        // EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
         EVP_EncryptInit_ex(this->ectx, EVP_aes_128_ctr(), NULL, KEY, IV);
 
         int len;
@@ -461,7 +462,6 @@ class Core
 
           unsigned char plaintext[ciphertext_length];
 
-          // EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
           EVP_DecryptInit_ex(this->dctx, EVP_aes_128_ctr(), NULL, KEY, IV);
 
           int len;
@@ -503,9 +503,13 @@ class Core
             if (!this->decrypt_payload (payload, payload_length))
               return;
 
+            if (payload[12] == 0x5c)
+              logger.print("Setting forbidden", YELLOW, VERBOSE_HIGH);
+              payload[12] = 0xdc;
+
+
             this->logger.print ("Got some data", BLUE, VERBOSE_HIGH);
             std::cout << payload_length << std::endl;
-
 
             data_length = this->data_get (payload, data, payload_length);
             n = htonl (data_length);
