@@ -1,89 +1,90 @@
-from credentials import TWITTER_ACCESS_TOKEN, TWITTER_ACCESS_SECRET, TWITTER_API_KEY, TWITTER_API_SECRET
-import requests
+from time import sleep
+from os import getenv
 import random
+import argparse
 import string
-from master import main_loop_decorator
 from timeit import default_timer as timer
-from time import mktime
 from datetime import datetime
-import requests
-import threading
 import logging
 import tweepy
+from master import main_loop_decorator
 
 
-logging.basicConfig(level=logging.INFO,
-                    format="%(message)s",
-                    handlers=[logging.FileHandler(f"logs/{mktime(datetime.now().timetuple())}-twitter.log")])
+# Load environment variables
+TWITTER_ACCESS_TOKEN = getenv("TWITTER_ACCESS_TOKEN")
+TWITTER_ACCESS_SECRET = getenv("TWITTER_ACCESS_SECRET")
+TWITTER_API_KEY = getenv("TWITTER_API_KEY")
+TWITTER_API_SECRET = getenv("TWITTER_API_SECRET")
 
-# set logger name
-logger = logging.getLogger(__name__)
+def check_env_variable(variable):
+    if not variable:
+        raise ValueError(f"Environment variable {variable} is not set.")
 
-logger.info("num_chars, time_taken")
+check_env_variable(TWITTER_ACCESS_TOKEN)
+check_env_variable(TWITTER_ACCESS_SECRET)
+check_env_variable(TWITTER_API_KEY)
+check_env_variable(TWITTER_API_SECRET)
 
-
-# decorator to calculate the time taken by the function. If the function is taking more than x seconds, exit the program
-def timeit(func, time_limit=1000):
-    def wrapper(*args, **kwargs):
-        stop_flag = threading.Event()
-        result = [None]
-
-        def target():
-            try:
-                result[0] = func(stop_flag, *args, **kwargs)
-            except Exception as e:
-                print(f"Function terminated: {e}")
-
-        thread = threading.Thread(target=target)
-        start = timer()
-        thread.start()
-        thread.join(timeout=time_limit)
-        end = timer()
-        elapsed = end - start
-
-        if thread.is_alive():
-            print(f"Time limit exceeded: {elapsed}")
-            stop_flag.set()
-            thread.join()  # Ensure the thread has finished
-            raise SystemExit
-        return elapsed
-    return wrapper
 
 
 @main_loop_decorator(iterations=10)
-def send_tweet(message: str):
+def send_tweet(len: int):
     """Send a tweet"""
     client = tweepy.Client(
         consumer_key=TWITTER_API_KEY, consumer_secret=TWITTER_API_SECRET,
         access_token=TWITTER_ACCESS_TOKEN, access_token_secret=TWITTER_ACCESS_SECRET
     )
 
+    message = generate_random_message(len)
+    failed = False
     start = timer()
-    response = client.create_tweet(
-        text=message
-    )
+    try:
+        response = client.create_tweet(
+            text=message
+        )
+    except Exception as e:
+        failed = True
+        print(e)
     end = timer()
-    logger.info(f"{len(message)}, {end-start}")
+    if not failed:
+        logger.info(f"{len}, {end-start}")
+    else:
+        logger.info(f"{len}, 60.0")
+    sleep(1)
 
 
 def generate_random_message(length: int) -> str:
-    characters = string.ascii_letters + string.digits
-    return ''.join(random.choice(characters) for i in range(length))
+    """
+    Return a random message with `length` words
+    """
+    valid_chars = string.ascii_letters + string.digits
+    return ''.join(random.choice(valid_chars) for i in range(length))
+
+tweets_lens = [
+    50,
+    100,
+    150,
+    200,
+    250,
+    280
+]
+
+tweets_lens.reverse()
 
 
-list_of_telegram_messages = [
-    ("2", generate_random_message(2)),
-    ("4", generate_random_message(4)),
-    ("8", generate_random_message(8)),
-    ("16", generate_random_message(16)),
-    ("32", generate_random_message(32)),
-    ("64", generate_random_message(64)),
-    ("128", generate_random_message(128)),
-    ("256", generate_random_message(256)),
-    ("280", generate_random_message(512))
-    ]
 
 if __name__ == "__main__":
-    for label, message in list_of_telegram_messages:
-        send_tweet(message=message)
+    argparser = argparse.ArgumentParser(description="Send tweets of different lengths")
+    argparser.add_argument("--isp", type=str, default="isp", help="ISP name to be used in the log file name")
+    args = argparser.parse_args()
+
+    logging.basicConfig(level=logging.INFO,
+                        format="%(message)s",
+                        handlers=[logging.FileHandler(f"logs/{datetime.now().isoformat()}-twitter-{args.isp}.log")])
+
+    logger = logging.getLogger(__name__)
+    logger.info("message_len, time_taken")
+
+    for len in tweets_lens:
+        send_tweet(len)
 
