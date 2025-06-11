@@ -209,7 +209,7 @@ class Core
             goto set_verdict;
           }
 
-          if (payload_length < check_available_tcp_packet_len() + iv_size + signature_size + metadata_size || payload_length < 200)
+          if (payload_length < check_available_tcp_packet_len() + iv_size + signature_size + metadata_size + 32 || payload_length < 200)
             goto set_verdict;
 
           this->callback_send (ip_header, udp_header, payload, payload_length);
@@ -256,7 +256,7 @@ class Core
             goto set_verdict;
           }
 
-          if (payload_length < iv_size + signature_size + metadata_size || payload_length < 200)
+          if (payload_length < iv_size + signature_size + metadata_size + 32 || payload_length < 200)
             goto set_verdict;
 
           this->callback_receive (payload, payload_length);
@@ -503,9 +503,16 @@ class Core
             if (!this->decrypt_payload (payload, payload_length))
               return;
 
-            if (payload[12] == 0x5c)
-              logger.print("Setting forbidden", YELLOW, VERBOSE_HIGH);
-              payload[12] = 0xdc;
+            // FOR JIO or VI
+            // if (payload[12] == 0x5c)
+            //   payload[12] = 0xdc;
+
+            // if (payload[12] == 0x7c)
+            //   payload[12] = 0xfc;
+
+            // FOR AIRTEL
+            if (payload[12] == 0x41)
+              payload[12] = 0xc1;
 
 
             this->logger.print ("Got some data", BLUE, VERBOSE_HIGH);
