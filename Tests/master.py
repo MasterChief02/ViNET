@@ -13,23 +13,58 @@
 
 import subprocess
 import re
-from termcolor import cprint
-
+import functools
 from time import sleep
+from enum import Enum
 from datetime import datetime
 
+class DeviceID(Enum):
+    VINET_1 = "ZD2222HWXH"
+    SERVER_1 = "ZD2222MZLZ"
+
+    VINET_2 = "ZF6527C3LT"
+    SERVER_2 = "ZD2222DX7R"
+
+    VINET_3 = "ZD222CDYRD"
+    SERVER_3 = "ZD222BGV8Y"
+
+
+class PhoneNumber(Enum):
+    JIO_CALLER = "8810521496"
+    JIO_CALLEE = "7827224921"
+
+    AIRTEL_1 = "9319825373"
+    AIRTEL_CALLEE = "9560327747"
+
+    VI_CALLER = "8447595190"
+    VI_CALLEE = "8447595175"
 
 
 class Logger ():
-    log_file = open ("text.log", "a")
+    log_file = open("text.log", "a")
 
     @staticmethod
-    def log (text, color="white"):
+    def colorized(text, color):
+        colors = {
+            "red": "\033[91m",
+            "green": "\033[92m",
+            "yellow": "\033[93m",
+            "blue": "\033[94m",
+            "magenta": "\033[95m",
+            "cyan": "\033[96m",
+            "white": "\033[97m",
+            "reset": "\033[0m"
+        }
+        return f"{colors[color]}{text}{colors['reset']}"
+
+
+    @staticmethod
+    def log(text, color="white"):
         time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         text = f"{time}: {text}"
-        cprint(text, color)
+        print(Logger.colorized(text, color))
         Logger.log_file.write(text + "\n")
-        Logger.log_file.flush ()
+        Logger.log_file.flush()
 
 
 class Device:
@@ -39,6 +74,10 @@ class Device:
                     ) -> None:
         self.mode = mode
         self.adb_device_name = adb_device_name
+        self.rmnet_interface = ""
+        self.rmnet_ipv6 = ""
+        self.hotspot_ip = ""
+        self.pcap_pid = ""
 
         if (self.mode == 0):
             self.name = "client"
@@ -54,8 +93,9 @@ class Device:
     def setup (self):
         Logger.log (f"Initiating setup for {self.name}", "yellow")
 
-        # Turn on wifi hotspot
-        self.run_command("input touchscreen swipe 930 880 930 180", sleep_time=5)
+        # Turn on wifi hotspot. Note these are device specific coordinates. 
+        # Will require adjustment for different devices.
+        self.run_command("input touchscreen swipe 930 880 930 50", sleep_time=5)
         self.run_command("am start -n com.android.settings/.TetherSettings", sleep_time=1)  # Go to tethering settings
         self.run_command("input keyevent KEYCODE_DPAD_DOWN", sleep_time=1) # select wifi hotspot
         self.run_command("input keyevent KEYCODE_ENTER", sleep_time=1) # go to wifi hotspot settings
@@ -71,6 +111,34 @@ class Device:
 
         Logger.log(f"IP address: {self.rmnet_ipv6}")
         Logger.log(f"Interface: {self.rmnet_interface}")
+    
+    def take_pcap(self, task: str, path: str, carrier: str, timeout_seconds: int = 0, root_path: str = "/data/local/tmp/pcaps/",) -> None:
+        self.stop_pcap()
+
+        time_str = datetime.now().isoformat()
+        file_name = f"{self.name}-{time_str}-{carrier}-{task}.pcap"
+        full_path = f"{root_path + path}/{file_name}"
+
+        cmd = f"tcpdump -i {self.rmnet_interface} -w {full_path}"
+
+        Logger.log("mkdir -p " + root_path + path)
+        self.run_command("mkdir -p " + root_path + path)
+
+        if timeout_seconds:
+            cmd = f"timeout {timeout_seconds} " + cmd
+
+        Logger.log(f"{cmd} & echo $!", "yellow")
+
+        pid = self.check_output(f"{cmd} & echo $!").strip()
+        self.pcap_pid = pid
+
+        Logger.log(f"Started tcpdump with pid {pid} and file name {file_name}", "green")
+
+    def stop_pcap(self) -> None:
+        if hasattr(self, "pcap_pid"):
+            self.run_command(f"kill -9 {self.pcap_pid}")
+            Logger.log(f"Stopped tcpdump with pid {self.pcap_pid}", "green")
+            del self.pcap_pid
 
     def set_ipv6_rules(self):
         self.run_command(f"ip6tables -w -t mangle -A INPUT -i {self.rmnet_interface} -p UDP -j NFQUEUE --queue-num 6")
@@ -106,6 +174,8 @@ class Device:
             result = self.check_output(f"ifconfig rmnet_data{i}")
             if (result.count ("inet6") == 2):
                 return f"rmnet_data{i}"
+        
+        raise Exception("No rmnet_data interface found with two inet6 addresses")
 
 
     def get_rmnet_ipv6 (self):
@@ -121,21 +191,24 @@ class Device:
     def place_call(self, number:str):
         Logger.log(f"Placing call to {number}")
         self.run_command(f"am start -a android.intent.action.CALL -d tel:{number}, --ei android.telecom.extra.START_CALL_WITH_VIDEO_STATE 3")
-        self.run_command(f"input keyevent KEYCODE_VOLUME_MUTE")
+        self.run_command(f"input keyevent KEYCODE_MUTE")
+
 
     def accept_call(self):
         self.run_command("input keyevent KEYCODE_CALL")
         Logger.log("Call accepted", "green")
-        self.run_command("input keyevent KEYCODE_VOLUME_MUTE")
+        self.run_command("input keyevent KEYCODE_MUTE")
 
     def end_call(self):
         self.run_command("input keyevent KEYCODE_ENDCALL")
 
     def restart(self):
         subprocess.run(f"adb -s {self.adb_device_name} reboot", shell=True)
-        Logger.log("Waiting to boot up", "yellow")
+        Logger.log(f"Waiting to boot up {self.name}", "yellow")
+
+    def is_up(self):
         subprocess.run(f"adb -s {self.adb_device_name} wait-for-device shell 'while [[ -z $(getprop sys.boot_completed) ]]; do sleep 1; done;'", shell=True)
-        Logger.log("Device booted succesfully", "green")
+        Logger.log(f"{self.name} Device booted succesfully", "green")
 
     def get_wlan0_ip(self):
         pattern = r'inet\s+([0-9.]+)'
@@ -144,8 +217,7 @@ class Device:
         return matches[0]
 
     def get_first_3_octets(self) -> str:
-        if self.mode == 0:
-            return self.hotspot_ip[:self.hotspot_ip.rfind(".")]
+        return self.hotspot_ip[:self.hotspot_ip.rfind(".")]
 
     def check_output(self, command:str, sleep_time:float = 0) -> str:
         final_command = f"adb -s {self.adb_device_name} shell \" su -c \'{command}\' \" &"
@@ -163,47 +235,86 @@ class Device:
         self.run_command("pkill -9 router")
 
 
+def main_loop_decorator(iterations:int = 10, last_octate:int = 249):
+    """Decorator to run any function under vinet environment
+    Things to change in the decorator:
+        Iterations: Number of iterations to run the function
+    
+    Things to change in master:
+        Device IDs
+        Phone numbers
+        Last octate: Last octate of the IP address to be used for the device
 
-def main_loop(test_func, **kwargs):
-    vinet = Device(0, "ZD2222DX7R")
-    server = Device(1, "ZF6527C3LT")
-    server.restart()
-    vinet.restart()
-    sleep(20)
-    server.get_ifaces()
-    try:
-        vinet.setup()
-        vinet.set_ipv4_rules()
-        vinet.set_ipv6_rules()
+    """
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            vinet = Device(0, DeviceID.VINET_1.value)
+            server = Device(1, DeviceID.SERVER_1.value)
 
-        server.set_ipv4_rules()
-        server.set_ipv6_rules()
+            server.restart()
+            server.is_up()
+            
+            vinet.restart()
+            vinet.is_up()
+                
+            sleep(5)
+            server.get_ifaces()
+            try:
+                vinet.setup()
+                vinet.set_ipv4_rules()
+                vinet.set_ipv6_rules()
 
-        subnet = vinet.get_first_3_octets()
-        vinet.setup_middle(subnet + ".152") # last octet is always same for the device
-        server.setup_middle(subnet + ".152")
-        sleep(5)
-        vinet.setup_core()
-        server.setup_core()
-        sleep(5)
+                server.set_ipv4_rules()
+                server.set_ipv6_rules()
 
-        vinet.place_call("8810521496")
-        sleep(10)
-        server.accept_call()
 
-        sleep(5)
-        # do a simple ping test to google.com
-        # subprocess.run(["ping", "-c", "10", "8.8.8.8" ])
-        test_func(**kwargs)
+                for i in range(iterations):
+                    func.iteration = i + 1
+                    subnet = vinet.get_first_3_octets()
+                    vinet.setup_middle(subnet + "." + str(last_octate) ) # last octet is always same for the device
+                    server.setup_middle(subnet + "." + str(last_octate))
+                    sleep(5)
+                    vinet.setup_core()
+                    server.setup_core()
+                    sleep(5)
+                    
+                    vinet.place_call(PhoneNumber.AIRTEL_CALLEE.value)
+                    sleep(15)
+                    server.accept_call()
 
-        server.end_call()
-        vinet.exit()
-        server.exit()
+                    # sleep for 5 seconds
+                    sleep(5)
 
-    finally:
-        server.end_call()
-        vinet.exit()
-        server.exit()
+
+                    # call the function
+                    func(*args, **kwargs)
+                    
+                    # end the call
+                    server.end_call()
+                    sleep(5)
+                    vinet.exit()
+                    server.exit()
+                    sleep(5)
+
+                    
+                vinet.exit()
+                server.exit()
+
+            finally:
+                server.end_call()
+                vinet.exit()
+                server.exit()
+        
+            
+        return wrapper
+
+    return decorator 
+
+@main_loop_decorator(iterations=10)
+def do_nothing():
+    while True:
+        sleep(1)
 
 if __name__ == "__main__":
-    main_loop()
+    do_nothing()
