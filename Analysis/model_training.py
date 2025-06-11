@@ -1,11 +1,9 @@
 from sklearn.pipeline import Pipeline
-from sklearn.model_selection import cross_validate, LeaveOneGroupOut
-from sklearn.model_selection import cross_val_score, StratifiedKFold
+from sklearn.model_selection import StratifiedKFold
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.tree import DecisionTreeClassifier
 from xgboost import XGBClassifier
-from sklearn.metrics import RocCurveDisplay, roc_curve, auc
-from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, confusion_matrix
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, confusion_matrix, roc_curve, auc
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
@@ -25,14 +23,15 @@ PIPELINE_DT = Pipeline([
     ("clf", DecisionTreeClassifier()) 
 ])
 
-def group_cv_scores(Xs: list[pd.DataFrame], ys: list[pd.Series], pipeline: Pipeline, groups: list[pd.Series], message: str = "", folder_to_save: str = ""):
+
+def group_cv_score(Xs: list[pd.DataFrame], ys: list[pd.DataFrame], pipeline: Pipeline, message: str = "", folder_to_save: str = ""):
     scores = []
     feature_names = Xs[0].columns
     message = message.replace("jio", "Jio")\
                                     .replace("airtel", "Airtel") \
                                     .replace("vilte", "ViLTE")\
                                     .replace("vinet", "ViNET") \
-                                    # .replace("vi", "VI") \
+                                    .replace("vi", "VI") \
 
     # Create directory if it doesn't exist
     pathlib.Path(f"figures/{folder_to_save}").mkdir(parents=True, exist_ok=True)
@@ -46,61 +45,52 @@ def group_cv_scores(Xs: list[pd.DataFrame], ys: list[pd.Series], pipeline: Pipel
     max_auc_chunk = None
 
     for i, (X, y) in tqdm(enumerate(zip(Xs, ys)), desc=message, total=len(Xs)):
-        
-        cv_results = cross_validate(
-            pipeline,
-            X, y,
-            groups=groups[i],
-            cv=LeaveOneGroupOut(),
-            scoring="roc_auc",
-            n_jobs=-1,
-            return_train_score=False,
-            return_estimator=True,
-        )
+        # perform k-fold cross-validation
+        # and get the average ROC AUC score
+        cv = StratifiedKFold(n_splits=7, shuffle=True, random_state=42)
 
+        fold_scores = []
+        fold_feature_importance = []
         fold_curves = []
         fold_aucs = []
 
-        fold_score = []
-        fold_feature_importance = []
+        for train_idx, test_idx in cv.split(X, y):
+            X_train, X_test = X.iloc[train_idx], X.iloc[test_idx]
+            y_train, y_test = y.iloc[train_idx], y.iloc[test_idx]
 
-        unique_grps = np.unique(groups[i])
-        for fold_idx, group_val in enumerate(unique_grps):
-            test_idx = np.where(groups[i] == group_val)[0]
+            pipeline.fit(X_train, y_train)
+            y_pred = pipeline.predict(X_test)
 
-            X_test = X.iloc[test_idx]
-            y_test = y.iloc[test_idx]
-            
-            estimator = cv_results["estimator"][fold_idx]
-            
-            y_pred = estimator.predict(X_test)
             roc_fpr, roc_tpr, _ = roc_curve(y_test, y_pred)
             roc_auc = auc(roc_fpr, roc_tpr)
 
             conf_matrix = confusion_matrix(y_test, y_pred)
             fold_fpr = conf_matrix[0][1] / (conf_matrix[0][0] + conf_matrix[0][1])
             fold_tpr = conf_matrix[1][1] / (conf_matrix[1][0] + conf_matrix[1][1])
-            
-            fold_score.append({
-                "fpr" : fold_fpr,
-                "tpr" : fold_tpr,
-                "accuracy" : accuracy_score(y_test, y_pred),
-                "precision" : precision_score(y_test, y_pred),
-                "recall" : recall_score(y_test, y_pred),
-                "f1" : f1_score(y_test, y_pred),
 
+            fold_scores.append({
+                "fpr": fold_fpr,
+                "tpr": fold_tpr,
+                "accuracy": accuracy_score(y_test, y_pred),
+                "precision": precision_score(y_test, y_pred),
+                "recall": recall_score(y_test, y_pred),
+                "f1": f1_score(y_test, y_pred),
             })
-            fold_feature_importance.append(np.array(estimator.named_steps["clf"].feature_importances_))
 
+            fold_feature_importance.append(np.array(pipeline.named_steps["clf"].feature_importances_))
             fold_curves.append((roc_fpr, roc_tpr))
             fold_aucs.append(roc_auc)
-
+        
         mean_fpr = np.linspace(0, 1, 100)
-        mean_tpr = np.zeros_like(mean_fpr)
+        mean_tpr = np.zeros_like(mean_fpr) # This variable will store the sum of TPRs first
         for fpr, tpr in fold_curves:
-            mean_tpr += np.interp(mean_fpr, fpr, tpr)
+            mean_tpr += np.interp(mean_fpr, fpr, tpr) # type: ignore
 
-        mean_tpr /= len(fold_curves)
+        # Assuming len(fold_curves) > 0, which is true if cv.n_splits > 0
+        mean_tpr /= len(fold_curves) # Now mean_tpr stores the average TPRs
+        
+        mean_tpr[0] = 0.0
+        mean_tpr[-1] = 1.0
 
         mean_auc = auc(mean_fpr, mean_tpr)
 
@@ -110,13 +100,13 @@ def group_cv_scores(Xs: list[pd.DataFrame], ys: list[pd.Series], pipeline: Pipel
             max_auc_chunk = (i + 1) * 10
 
         # Calculate mean of all the fold scores
-        score_keys = fold_score[0].keys()
-        mean_score = {k: np.mean([s[k] for s in fold_score]) for k in score_keys}
+        score_keys = fold_scores[0].keys()
+        mean_score = {k: np.mean([s[k] for s in fold_scores]) for k in score_keys}
         mean_score = {k : np.round(100 * v, 4) for k, v in mean_score.items()}
         mean_score["chunk_length"] = (i + 1) * 10 # type: ignore
         scores.append(mean_score)
 
-        feature_imp = np.mean(fold_feature_importance, axis=0)
+        feature_imp = np.mean(fold_feature_importance, axis=0) # type: ignore
 
         # only keep the top 10 features
         top_features = np.argsort(feature_imp)[-10:]
@@ -148,14 +138,6 @@ def group_cv_scores(Xs: list[pd.DataFrame], ys: list[pd.Series], pipeline: Pipel
     if max_auc_curve:
         roc_ax.plot(max_auc_curve[0], max_auc_curve[1], label=f'Max AUC: {max_auc:.2f} (Chunk {max_auc_chunk}s)', lw=2)
 
-    # save the roc curve to a text file as npy array
-    np.savetxt(f'numbers/{message.replace(":", "").replace(" ", "_") + "_roc_curve.txt"}', np.array(max_auc_curve).T, delimiter=",")
-
-    # save the auc value to a text file
-    with open(f'numbers/{message.replace(":", "").replace(" ", "_") + "_auc.txt"}', "w") as f:
-        f.write(f"{max_auc:.2f}\n")
-        f.write(f"{max_auc_chunk}\n")
-
     roc_ax.plot([0, 1], [0, 1], linestyle='--', lw=2, color='gray', label='Chance', alpha=.8)
     roc_ax.set_xlabel('False Positive Rate')
     roc_ax.set_ylabel('True Positive Rate')
@@ -172,74 +154,6 @@ def group_cv_scores(Xs: list[pd.DataFrame], ys: list[pd.Series], pipeline: Pipel
     clf_name = pipeline.named_steps["clf"].__class__.__name__
     df["classifier"] = clf_name
     df.to_csv(f"statistics/{folder_to_save}/{message.replace(':', '').replace(' ', '_')}_scores.csv", index=False)
-
-
-# def group_cv_scores(Xs: list[pd.DataFrame], ys: list[pd.Series], pipeline: Pipeline, message: str = "", folder_to_save: str = ""):
-#     scores = []
-#     feature_names = Xs[0].columns
-#     message = message.replace("jio", "Jio")\
-#                                     .replace("airtel", "Airtel") \
-#                                     .replace("vilte", "ViLTE")\
-#                                     .replace("vinet", "ViNET") \
-#                                     .replace("vi", "VI") \
-
-#     # Create directory if it doesn't exist
-#     pathlib.Path(f"figures/{folder_to_save}").mkdir(parents=True, exist_ok=True)
-#     pathlib.Path(f"statistics/{folder_to_save}").mkdir(parents=True, exist_ok=True)
-#     pathlib.Path(f"feature_importances/{folder_to_save}").mkdir(parents=True, exist_ok=True)
-
-#     roc_fig, roc_ax = plt.subplots(figsize=(10, 8))
-
-#     for i, (X, y) in tqdm(enumerate(zip(Xs, ys)), desc=message, total=len(Xs)):
-#         # perform k-fold cross-validation
-#         # and get the average ROC AUC score
-#         cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
-
-
-
-#         aucs = []
-#         tprs = []
-#         fold_scores = []
-#         mean_fpr = np.linspace(0, 1, 100)
-
-#         for train_idx, test_idx in cv.split(X, y):
-#             X_train, X_test = X.iloc[train_idx], X.iloc[test_idx]
-#             y_train, y_test = y.iloc[train_idx], y.iloc[test_idx]
-
-#             pipeline.fit(X_train, y_train)
-#             y_pred = pipeline.predict(X_test)
-#             y_proba = pipeline.predict_proba(X_test)[:, 1]
-
-#             roc_fpr, roc_tpr, _ = roc_curve(y_test, y_proba)
-#             roc_auc = auc(roc_fpr, roc_tpr)
-
-#             aucs.append(roc_auc)
-
-#             inter_tpr = np.interp(mean_fpr, roc_fpr, roc_tpr)
-#             inter_tpr[0] = 0.0
-#             tprs.append(inter_tpr)
-#             fold_scores.append({
-#                 "accuracy": accuracy_score(y_test, y_pred),
-#                 "precision": precision_score(y_test, y_pred),
-#                 "recall": recall_score(y_test, y_pred),
-#                 "f1": f1_score(y_test, y_pred),
-#             })
-        
-#         mean_tpr = np.mean(tprs, axis=0)
-#         mean_tpr[-1] = 1.0
-#         mean_auc = auc(mean_fpr, mean_tpr)
-#         std_auc = np.std(aucs)
-#         mean_score = {k: np.mean([s[k] for s in fold_scores]) for k in fold_scores[0].keys()}
-#         mean_score = {k: np.round(100 * v, 4) for k, v in mean_score.items()}
-#         mean_score["chunk_length"] = (i+1) * 10 # type: ignore
-#         mean_score["auc"] = np.round(100 * mean_auc, 4)
-#         mean_score["std_auc"] = np.round(100 * std_auc, 4)
-#         scores.append(mean_score)
-#         # plot the ROC curve
-#         roc_ax.plot(mean_fpr, mean_tpr, lw=2, alpha=0.8,
-#                     label=f'Chunk {((i + 1) * 10)}s: AUC = {mean_auc:.2f} (± {std_auc:.2f})')
-                    
-
 
 
 
@@ -312,15 +226,17 @@ class Dataset:
 
     def _load_data(self):
         for chunk_length in self.chunk_lengths:
-            self.df_chunks[chunk_length] = {}
-            self.df_chunks[chunk_length]["airtel"] = {}
-            self.df_chunks[chunk_length]["jio"] = {}
-            self.df_chunks[chunk_length]["vi"] = {}
+            self.df_chunks[chunk_length] = {
+                "airtel": {},
+                "jio": {},
+                "vi": {}
+            }
 
-            self.df_chunks_pl[chunk_length] = {}
-            self.df_chunks_pl[chunk_length]["airtel"] = {}
-            self.df_chunks_pl[chunk_length]["jio"] = {}
-            self.df_chunks_pl[chunk_length]["vi"] = {}
+            self.df_chunks_pl[chunk_length] = {
+                "airtel": {},
+                "jio": {},
+                "vi": {}
+            }
 
         
             airtel_chunk_dir = self.airtel_root / f"chunks_{chunk_length}s"
@@ -376,7 +292,6 @@ class Dataset:
         for i in range(2): # for the two feature sets
             Xs = []
             ys = []
-            groups_list = []
             for chunk_length in self.chunk_lengths:
                 if i % 2 == 0:
                     df1 = self.df_chunks[chunk_length][provider][class1]
@@ -412,22 +327,20 @@ class Dataset:
 
                 Xs.append(pd.concat([df1_X, df2_X], axis=0, ignore_index=True))
                 ys.append(pd.concat([df1_y, df2_y], axis=0, ignore_index=True))
-                groups_list.append(pd.concat([df1_dates, df2_dates], axis=0, ignore_index=True))
 
             if i % 2 == 0:
-                folder_to_save = f"summary/{provider}"
+                folder_to_save = f"summary"
                 suffix_file_name = ""
             else:
-                folder_to_save = f"pl/{provider}"
+                folder_to_save = f"pl"
                 suffix_file_name = " pl"
 
 
-            group_cv_scores(Xs, ys, PIPELINE_XGB, groups_list, f"{provider}: {class1} vs {class2}" + suffix_file_name, folder_to_save=folder_to_save)
-            # group_cv_scores(Xs, ys, PIPELINE_RF, groups_list, f"{provider}: {class1} vs {class2} rf" + suffix_file_name, folder_to_save=folder_to_save)
-            # group_cv_scores(Xs, ys, PIPELINE_DT, groups_list, f"{provider}: {class1} vs {class2} dt" + suffix_file_name, folder_to_save=folder_to_save)
+            group_cv_score(Xs, ys, PIPELINE_XGB, f"{provider}: {class1} vs {class2}" + suffix_file_name, folder_to_save=folder_to_save)
 
 
 if __name__ == "__main__":
-    dataset = Dataset("/home/vinet/sec_analysis/long_time_analysis/features")
-
-    # print(dataset.c10.jio.vilte)
+    dataset = Dataset("features")
+    dataset.train_across_providers("airtel", "vilte", "vinet")
+    dataset.train_across_providers("jio", "vilte", "vinet")
+    dataset.train_across_providers("vi", "vilte", "vinet")
