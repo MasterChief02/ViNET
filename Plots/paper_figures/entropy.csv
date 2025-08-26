@@ -1,0 +1,5 @@
+provider,type,mean,std
+airtel,vilte,7.00,0.74
+airtel,vinet,7.02,0.82
+jio,vilte,7.42,0.67
+jio,vinet,7.42,0.68
