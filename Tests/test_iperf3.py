@@ -7,7 +7,8 @@ import argparse
 
 
 @main_loop_decorator(iterations=15)
-def iper3_test():
+
+def iper3_test(url: str):
     result = subprocess.run("iperf3 -c 192.168.224.76 --json --connect-timeout 30000" , 
                             shell=True,
                             text=True,  
@@ -19,7 +20,8 @@ def iper3_test():
         if result.get("error", None) != None:
             return
 
-        file_name = f"logs/json/{datetime.now().isoformat()}-airtel-iperf3.json"
+
+        file_name = f"logs/json/{datetime.now().isoformat()}-iperf3-{url}.json"
         with open(file_name, "w") as f:
             json.dump(result, f, indent=2)
 
@@ -34,10 +36,9 @@ if __name__ == "__main__":
 
     logging.basicConfig(level=logging.INFO,
                         format="%(message)s",
-                        handlers=[logging.FileHandler(f"logs/{datetime.now().isoformat()}-iper3-{args.isp}.log")])
+                        handlers=[logging.FileHandler(f"logs/{datetime.now().isoformat()}-iperf3-{args.isp}.log")])
 
     logger = logging.getLogger(__name__)
     logger.info("speed(bits/s)")
 
-    iper3_test()
-
+    iper3_test(url)
