@@ -7,7 +7,8 @@ TO-DO
     2. Identify various algorithms used for detection and show effectiveness against them.
 
 
-ip6tables -t mangle -A INPUT -i rmnet_data1 -p UDP -j NFQUEUE --queue-num 5
+ip6tables -t mangle -A INPUT -i rmnet_data1 -p UDP -j NFQUEUE --queue-num 6
+
 ip6tables -t mangle -A OUTPUT -o rmnet_data1 -p UDP -j NFQUEUE --queue-num 5
 
 
@@ -19,4 +20,5 @@ SERVER
 <!-- iptables -t mangle -A INPUT -i rmnet_data2 -j NFQUEUE --queue-num 10
 iptables -t mangle -A INPUT -i wlan0 -j NFQUEUE --queue-num 10 -->
 iptables -t nat -A POSTROUTING -o wlan0 -j MASQUERADE
+
 iptables -A OUTPUT -o wlan0 -p icmp --icmp-type 3 -j REJECT
