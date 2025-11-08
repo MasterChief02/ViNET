@@ -1,0 +1,15 @@
+[package]
+name = "rtp_loss"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+chrono = "0.4.42"
+clap = { version = "4.5.51", features = ["derive"] }
+indicatif = "0.18.2"
+pcap = "2.2.0"
+pnet = "0.35.0"
+pnet_packet = "0.35.0"
+regex = "1.12.2"
+rtp-rs = "0.6.0"
+sha2 = "0.10"
