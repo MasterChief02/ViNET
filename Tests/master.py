@@ -17,27 +17,28 @@ import functools
 from time import sleep
 from enum import Enum
 from datetime import datetime
+import config
 
 class DeviceID(Enum):
-    VINET_1 = "REDACTED_SERIAL_VINET_1"
-    SERVER_1 = "REDACTED_SERIAL_SERVER_1"
+    VINET_1 = config.get_device("vinet_1")
+    SERVER_1 = config.get_device("server_1")
 
-    VINET_2 = "REDACTED_SERIAL_VINET_2"
-    SERVER_2 = "REDACTED_SERIAL_SERVER_2"
+    VINET_2 = config.get_device("vinet_2")
+    SERVER_2 = config.get_device("server_2")
 
-    VINET_3 = "REDACTED_SERIAL_VINET_3"
-    SERVER_3 = "REDACTED_SERIAL_SERVER_3"
+    VINET_3 = config.get_device("vinet_3")
+    SERVER_3 = config.get_device("server_3")
 
 
 class PhoneNumber(Enum):
-    JIO_CALLER = "REDACTED_JIO_CALLER"
-    JIO_CALLEE = "REDACTED_JIO_CALLEE"
+    JIO_CALLER = config.get_phone("jio_caller")
+    JIO_CALLEE = config.get_phone("jio_callee")
 
-    AIRTEL_1 = "REDACTED_AIRTEL_1"
-    AIRTEL_CALLEE = "REDACTED_AIRTEL_CALLEE"
+    AIRTEL_1 = config.get_phone("airtel_1")
+    AIRTEL_CALLEE = config.get_phone("airtel_callee")
 
-    VI_CALLER = "REDACTED_VI_CALLER"
-    VI_CALLEE = "REDACTED_VI_CALLEE"
+    VI_CALLER = config.get_phone("vi_caller")
+    VI_CALLEE = config.get_phone("vi_callee")
 
 
 class Logger ():
@@ -249,8 +250,12 @@ def main_loop_decorator(iterations:int = 10, last_octate:int = 249):
     def decorator(func):
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
-            vinet = Device(0, DeviceID.VINET_1.value)
-            server = Device(1, DeviceID.SERVER_1.value)
+            active_pair = config.active_pair
+            vinet_id = getattr(DeviceID, f"VINET_{active_pair}").value
+            server_id = getattr(DeviceID, f"SERVER_{active_pair}").value
+            
+            vinet = Device(0, vinet_id)
+            server = Device(1, server_id)
 
             server.restart()
             server.is_up()

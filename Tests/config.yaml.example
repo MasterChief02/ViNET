@@ -1,0 +1,17 @@
+devices:
+  vinet_1: "REDACTED_SERIAL_VINET_1"
+  server_1: "REDACTED_SERIAL_SERVER_1"
+  vinet_2: "REDACTED_SERIAL_VINET_2"
+  server_2: "REDACTED_SERIAL_SERVER_2"
+  vinet_3: "REDACTED_SERIAL_VINET_3"
+  server_3: "REDACTED_SERIAL_SERVER_3"
+
+phone_numbers:
+  jio_caller: "REDACTED_PHONE_NUMBER"
+  jio_callee: "REDACTED_PHONE_NUMBER"
+  airtel_1: "REDACTED_PHONE_NUMBER"
+  airtel_callee: "REDACTED_PHONE_NUMBER"
+  vi_caller: "REDACTED_PHONE_NUMBER"
+  vi_callee: "REDACTED_PHONE_NUMBER"
+
+active_device_pair: 1  # Options: 1, 2, 3
