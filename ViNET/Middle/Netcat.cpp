@@ -54,10 +54,9 @@ class Netcat : public Middle
                   this->logger.print ("read failed", RED, VERBOSE_HIGH);
                   continue;
                 }
+
               for (int i=0; i< length; i++)
-                {
-                  std:: cout << s[i];
-                }
+                std:: cout << s[i];
               std::cout << std::endl;
             }
         }

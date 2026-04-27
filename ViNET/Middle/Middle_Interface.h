@@ -26,42 +26,42 @@ class Middle
           int socket_fd;
 
           struct sockaddr_in address;
-          socklen_t addrlen = sizeof(address);
+          socklen_t addrlen = sizeof (address);
 
           // Specifying the address
           address.sin_family = AF_INET;
           address.sin_addr.s_addr = INADDR_ANY;
-          address.sin_port = htons(port);
+          address.sin_port = htons (port);
 
           // Creating socket file descriptor
-          if ((socket_fd = socket(AF_INET, SOCK_STREAM, 0)) < 0)
+          if ((socket_fd = socket (AF_INET, SOCK_STREAM, 0)) < 0)
             {
-              perror("Socket initialization failed");
-              exit(EXIT_FAILURE);
+              perror ("Socket initialization failed");
+              exit (EXIT_FAILURE);
             }
 
           // Binding socket to the port
-          if (bind(socket_fd, (struct sockaddr*)&address, sizeof(address)) < 0)
+          if (bind (socket_fd, (struct sockaddr*)&address, sizeof (address)) < 0)
             {
-              perror("Socket binding failed");
-              exit(EXIT_FAILURE);
+              perror ("Socket binding failed");
+              exit (EXIT_FAILURE);
             }
 
           // Listening for connection
-          if (listen(socket_fd, 1) < 0)
+          if (listen (socket_fd, 1) < 0)
             {
-              perror("Socket listening failed");
-              exit(EXIT_FAILURE);
+              perror ("Socket listening failed");
+              exit (EXIT_FAILURE);
             }
-          this->logger.print("Waiting for connection", WHITE, VERBOSE_LOW);
+          this->logger.print ("Waiting for connection", WHITE, VERBOSE_LOW);
 
           // Connecting to core
-          if ((*fd = accept(socket_fd, (struct sockaddr*)&address, &addrlen)) < 0)
+          if ((*fd = accept (socket_fd, (struct sockaddr*)&address, &addrlen)) < 0)
             {
-              perror("Could not connect to core");
-              exit(EXIT_FAILURE);
+              perror ("Could not connect to core");
+              exit (EXIT_FAILURE);
             }
-          this->logger.print("Connected to core", GREEN, VERBOSE_LOW);
+          this->logger.print ("Connected to core", GREEN, VERBOSE_LOW);
         }
 
 
@@ -73,7 +73,7 @@ class Middle
 
 
       virtual void *input () = 0;
-      virtual void *output() = 0;
+      virtual void *output () = 0;
       virtual void setup_middle () = 0;
 
 
@@ -94,14 +94,14 @@ class Middle
 
       static void *input_helper (void *context)
         {
-          return ((Middle *) context)->input();
+          return ((Middle *) context)->input ();
         }
 
 
 
       static void *output_helper (void *context)
         {
-          return ((Middle *) context)->output();
+          return ((Middle *) context)->output ();
         }
 
 
@@ -125,7 +125,6 @@ class Middle
           pthread_join (thread_input, NULL);
           pthread_join (thread_output, NULL);
         }
-
   };
 
 #endif

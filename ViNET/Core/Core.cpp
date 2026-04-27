@@ -17,10 +17,12 @@
 #include <netinet/udp.h>
 #include <thread>
 #include <fcntl.h>
+#include <sys/ioctl.h>
 #include <openssl/aes.h>
 #include <openssl/evp.h>
 #include <openssl/rand.h>
 #include <openssl/err.h>
+#include <cstdlib>
 
 
 #include "../Common/Logger.h"
@@ -48,7 +50,14 @@ class Core
       int middle_port;
       std::string middle_ip;
 
+      double alpha;
+
       Logger logger;
+
+      EVP_CIPHER_CTX *ectx = EVP_CIPHER_CTX_new ();
+      EVP_CIPHER_CTX *dctx = EVP_CIPHER_CTX_new ();
+
+
 
       void setup_middle ()
         {
@@ -76,9 +85,9 @@ class Core
 
           if (set_timeout)
             {
-                fcntl(*fd, F_SETFL, O_NONBLOCK);
+              int flags = fcntl(*fd, F_GETFL, 0);
+              fcntl(*fd, F_SETFL, flags | O_NONBLOCK);
             }
-
 
           this->logger.print ("Connected to middle", GREEN, VERBOSE_LOW);
         }
@@ -122,9 +131,12 @@ class Core
           this->core_fd_send = nfq_fd (this->handle_send);
         }
 
+
+
       void setup_core_recv ()
         {
           this->handle_recv = nfq_open ();
+
           if (!this->handle_recv)
             {
               perror ("Error in nfq_open()");
@@ -144,6 +156,7 @@ class Core
             }
 
           this->q_handle_recv = nfq_create_queue (this->handle_recv, this->queue_num_recv, &Core::callback_helper_recv, this);
+
           if (!this->q_handle_recv)
             {
               perror ("Error in nfq_create_queue()");
@@ -161,17 +174,18 @@ class Core
 
 
 
-      void setup ()
-        {
-          this->setup_middle ();
-          this->setup_core_send ();
-          this->setup_core_recv ();
-        }
+        void setup ()
+          {
+            this->setup_middle ();
+            this->setup_core_send ();
+            this->setup_core_recv ();
+          }
+
 
 
       int send_callback (struct nfq_q_handle *q_handle,
-                    struct nfgenmsg *nfmsg,
-                    struct nfq_data *nfa)
+                         struct nfgenmsg *nfmsg,
+                         struct nfq_data *nfa)
         {
           struct nfqnl_msg_packet_hdr *ph;
 
@@ -187,16 +201,19 @@ class Core
           struct udphdr *udp_header = (struct udphdr *) (pkt + sizeof (struct ip6_hdr));
 
           // Retrieving application payload
-          int rtp_header_size = 13;
+          int rtp_header_size = 14;
+
           char *payload = (char *) (pkt + sizeof (struct ip6_hdr) + sizeof (struct udphdr)) + rtp_header_size;
           int payload_length = ntohs (udp_header->len) - rtp_header_size;
-
           int iv_size = 16;
           int signature_size = 5 * sizeof (char);
           int metadata_size = sizeof (int32_t);
-          // int safe_padding = 13;
 
-          if (payload_length < check_available_tcp_packet_len() + iv_size + signature_size + metadata_size || payload_length < 200)
+          if (ntohs (udp_header->len) < 200) {
+            goto set_verdict;
+          }
+
+          if (payload_length < check_available_tcp_packet_len () + iv_size + signature_size + metadata_size + 32 || payload_length < 200)
             goto set_verdict;
 
           this->callback_send (ip_header, udp_header, payload, payload_length);
@@ -211,10 +228,10 @@ class Core
             return verdict;
         }
 
-      
+
       int recv_callback (struct nfq_q_handle *q_handle,
-                    struct nfgenmsg *nfmsg,
-                    struct nfq_data *nfa)
+                         struct nfgenmsg *nfmsg,
+                         struct nfq_data *nfa)
         {
           struct nfqnl_msg_packet_hdr *ph;
 
@@ -230,7 +247,7 @@ class Core
           struct udphdr *udp_header = (struct udphdr *) (pkt + sizeof (struct ip6_hdr));
 
           // Retrieving application payload
-          int rtp_header_size = 13;
+          int rtp_header_size = 14;
 
           char *payload = (char *) (pkt + sizeof (struct ip6_hdr) + sizeof (struct udphdr)) + rtp_header_size;
           int payload_length = ntohs (udp_header->len) - rtp_header_size;
@@ -238,28 +255,30 @@ class Core
           int iv_size = 16;
           int signature_size = 5 * sizeof (char);
           int metadata_size = sizeof (int32_t);
-          // int safe_padding = 13
 
-          if (payload_length < iv_size + signature_size + metadata_size || payload_length < 200)
+          if (ntohs (udp_header->len) < 200) {
+            goto set_verdict;
+          }
+
+          if (payload_length < iv_size + signature_size + metadata_size + 32 || payload_length < 200)
             goto set_verdict;
 
           this->callback_receive (payload, payload_length);
           if (payload_length > 2000)
-                this->logger.print ("Payload > 2000", YELLOW, VERBOSE_VERY_HIGH);
+            this->logger.print ("Payload > 2000", YELLOW, VERBOSE_VERY_HIGH);
 
 
           set_verdict:
+            this->update_checksum (ip_header, udp_header);
             int verdict = nfq_set_verdict (q_handle, packet_id, NF_ACCEPT, len, pkt);
-            if (verdict == -1) {
+            if (verdict == -1)
+              {
                 perror ("Error in nfq_set_verdict()");
                 exit (EXIT_FAILURE);
-            }
+              }
 
-            return verdict;
+          return verdict;
         }
-
-      
-
 
 
 
@@ -307,8 +326,8 @@ class Core
 
 
       int32_t data_get (char *payload,
-                     char *data,
-                     int payload_length)
+                        char *data,
+                        int payload_length)
         {
           char signature[] = "ViNET";
           int signature_length = strlen (signature);
@@ -326,64 +345,74 @@ class Core
 
 
 
-      void update_checksum(ip6_hdr* ip_header,
+      void update_checksum (ip6_hdr* ip_header,
                             udphdr* udp_header)
         {
           udp_header->check = 0;
-          udp_header->check = nfq_checksum_tcp_udp_ipv6(ip_header, udp_header, IPPROTO_UDP);
+          udp_header->check = nfq_checksum_tcp_udp_ipv6 (ip_header, udp_header, IPPROTO_UDP);
         }
 
 
-      uint32_t check_available_tcp_packet_len() {
-        int n;
-        uint32_t data_length;
-        n = recv (this->middle_control_fd, &data_length, sizeof (data_length), MSG_PEEK);
-        // std::cout << "Before ntohl: " << data_length << std::endl;
-        data_length = ntohl (data_length);
-        // std::cout << "After ntohl: " << data_length << std::endl;
-        return data_length;
-      }
 
-      void encrypt_payload(char* payload, int payload_length) {
+      uint32_t check_available_tcp_packet_len ()
+        {
+          int bytes_available = 0;
+          ioctl (this->middle_control_fd, FIONREAD, &bytes_available);
 
-        const unsigned char *KEY = (const unsigned char*)"1234567890abcdef";
-        
-        const int IV_SIZE = 16;
-
-        unsigned char IV[IV_SIZE];
-        RAND_bytes(IV, IV_SIZE);
-
-        unsigned char* plaintext = (unsigned char*) payload;
-        int plaintext_length = payload_length - IV_SIZE;
-
-        unsigned char ciphertext[plaintext_length];
-
-        EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
-        EVP_EncryptInit_ex(ctx, EVP_aes_128_ctr(), NULL, KEY, IV);
-
-        int len;
-
-        EVP_EncryptUpdate(ctx, ciphertext, &len, plaintext, plaintext_length);
-
-        int ciphertext_length = len;
-
-        EVP_EncryptFinal_ex(ctx, ciphertext + len, &len);
-
-        ciphertext_length += len;
-
-        if (ciphertext_length != plaintext_length) {
-          this->logger.print("ENCRYPTION FAILED", RED, VERBOSE_VERY_HIGH);
-          return;
+          if (bytes_available >= sizeof (uint32_t))
+            {
+              int n;
+              uint32_t data_length;
+              n = recv (this->middle_control_fd, &data_length, sizeof (data_length), MSG_PEEK);
+              // std::cout << "Before ntohl: " << data_length << std::endl;
+              data_length = ntohl (data_length);
+              // std::cout << "After ntohl: " << data_length << std::endl;
+              return data_length;
+            }
+          return INT16_MAX;
         }
 
-        this->logger.print("ENCRYPTION SUCCESS", GREEN, VERBOSE_VERY_HIGH);
 
-        memcpy(payload, IV, IV_SIZE);
-        memcpy(payload + IV_SIZE, ciphertext, ciphertext_length);
 
-        EVP_CIPHER_CTX_free(ctx);
+      void encrypt_payload (char* payload, int payload_length)
+        {
+          const unsigned char *KEY = (const unsigned char*) "1234567890abcdef";
 
-      }
+          const int IV_SIZE = 16;
+
+          unsigned char IV[IV_SIZE];
+          RAND_bytes (IV, IV_SIZE);
+
+          unsigned char* plaintext = (unsigned char*) payload;
+          int plaintext_length = payload_length - IV_SIZE;
+
+          unsigned char ciphertext[plaintext_length];
+
+          EVP_EncryptInit_ex (this->ectx, EVP_aes_128_ctr(), NULL, KEY, IV);
+
+          int len;
+
+          EVP_EncryptUpdate (this->ectx, ciphertext, &len, plaintext, plaintext_length);
+
+          int ciphertext_length = len;
+
+          EVP_EncryptFinal_ex (this->ectx, ciphertext + len, &len);
+
+          ciphertext_length += len;
+
+          if (ciphertext_length != plaintext_length)
+            {
+              this->logger.print ("ENCRYPTION FAILED", RED, VERBOSE_VERY_HIGH);
+              return;
+            }
+
+          this->logger.print ("ENCRYPTION SUCCESS", GREEN, VERBOSE_VERY_HIGH);
+
+          memcpy (payload, IV, IV_SIZE);
+          memcpy (payload + IV_SIZE, ciphertext, ciphertext_length);
+
+          EVP_CIPHER_CTX_reset (this->ectx);
+        }
 
 
 
@@ -413,7 +442,6 @@ class Core
               return;
             }
 
-
           this->logger.print ("Sending data", GREEN, VERBOSE_HIGH);
           std::cout << payload_length << std::endl;
 
@@ -421,170 +449,191 @@ class Core
           this->data_add (payload, data, payload_length, data_length);
           this->encrypt_payload(payload, payload_length);
           this->update_checksum (ip_header, udp_header);
-
         }
 
 
-        bool decrypt_payload(char *payload, int payload_length) {
 
+      bool decrypt_payload (char *payload, int payload_length)
+        {
           const unsigned char *KEY = (const unsigned char*)"1234567890abcdef";
-          
+
           const int IV_SIZE = 16;
 
           unsigned char IV[IV_SIZE];
-          memcpy(IV, payload, IV_SIZE);
+          memcpy (IV, payload, IV_SIZE);
 
           unsigned char *ciphertext = (unsigned char *) payload + IV_SIZE;
           int ciphertext_length = payload_length - IV_SIZE;
 
           unsigned char plaintext[ciphertext_length];
 
-          EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
-          EVP_DecryptInit_ex(ctx, EVP_aes_128_ctr(), NULL, KEY, IV);
+          EVP_DecryptInit_ex (this->dctx, EVP_aes_128_ctr (), NULL, KEY, IV);
 
           int len;
 
-          EVP_DecryptUpdate(ctx, plaintext, &len, ciphertext, ciphertext_length);
+          EVP_DecryptUpdate (this->dctx, plaintext, &len, ciphertext, ciphertext_length);
 
           int plaintext_length = len;
 
-          EVP_DecryptFinal_ex(ctx, plaintext + len, &len);
+          EVP_DecryptFinal_ex (this->dctx, plaintext + len, &len);
 
           plaintext_length += len;
 
-          if (ciphertext_length != plaintext_length) {
-            this->logger.print("DECRYPTION FAILED", RED, VERBOSE_VERY_HIGH);
+          if (ciphertext_length != plaintext_length)
+            {
+              this->logger.print ("DECRYPTION FAILED", RED, VERBOSE_VERY_HIGH);
+              return false;
+            }
+
+          if (!signature_verify ((char *) plaintext, plaintext_length))
             return false;
-          }
 
-          if (!signature_verify((char *) plaintext, plaintext_length)) return false;
 
-          
-          memcpy(payload, plaintext, plaintext_length);
+          memcpy (payload, plaintext, plaintext_length);
+          EVP_CIPHER_CTX_reset (this->dctx);
+
           return true;
+      }
 
+
+
+      void callback_receive (char *payload,
+                              int payload_length)
+        {
+          char data[2048];
+          int data_length;
+          uint32_t n;
+
+          if (!this->decrypt_payload (payload, payload_length))
+            return;
+
+          // FOR JIO or VI
+          // if (payload[12] == 0x5c)
+          //   payload[12] = 0xdc;
+
+          // if (payload[12] == 0x7c)
+          //   payload[12] = 0xfc;
+
+          // FOR AIRTEL
+          if (payload[12] == 0x41)
+            payload[12] = 0xc1;
+
+          this->logger.print ("Got some data", BLUE, VERBOSE_HIGH);
+          std::cout << payload_length << std::endl;
+
+          data_length = this->data_get (payload, data, payload_length);
+          n = htonl (data_length);
+
+          if (write (this->middle_control_fd, &n, sizeof (n)) <= 0)
+            {
+              perror ("Failed to write len");
+            }
+
+          if (write (this->middle_data_fd, data, data_length * sizeof (char)) <= 0)
+            {
+              perror ("Failed to write data");
+            }
         }
 
 
 
-        void callback_receive (char *payload,
-                               int payload_length)
-          {
-            char data[2048];
-            int data_length;
-            uint32_t n;
-
-
-
-            if (!this->decrypt_payload (payload, payload_length))
-              return;
-
-            this->logger.print ("Got some data", BLUE, VERBOSE_HIGH);
-            std::cout << payload_length << std::endl;
-
-
-            data_length = this->data_get (payload, data, payload_length);
-            n = htonl (data_length);
-
-            if (write (this->middle_control_fd, &n, sizeof (n)) <= 0)
-              {
-                perror ("Failed to write len");
-              }
-
-            if (write (this->middle_data_fd, data, data_length * sizeof (char)) <= 0)
-              {
-                perror ("Failed to write data");
-              }
-          }
-
-
-
     public:
-      Core (char *self_ip)
+      Core (char *self_ip, double alpha)
         {
           this->self_ip = self_ip;
           this->queue_num_send = 5;
           this->queue_num_recv = 6;
           this->middle_port = 8080;
           this->middle_ip = "127.0.0.1";
+          this->alpha = (double) alpha;
 
           this->setup ();
         }
+
 
 
       void run_send_queue ()
         {
           char buf[4096];
           int receive;
-          while ((receive = recv(this->core_fd_send, buf, sizeof(buf), 0)) >= 0)
+          while ((receive = recv (this->core_fd_send, buf, sizeof (buf), 0)) >= 0)
             {
-              nfq_handle_packet(this->handle_send, buf, receive);
+              nfq_handle_packet (this->handle_send, buf, receive);
             }
 
-          nfq_destroy_queue(this->q_handle_send);
-          nfq_close(this->handle_send);
+          nfq_destroy_queue (this->q_handle_send);
+          nfq_close (this->handle_send);
 
         }
+
+
 
       void run_recv_queue ()
         {
           char buf[4096];
           int receive;
-          while ((receive = recv(this->core_fd_recv, buf, sizeof(buf), 0)) >= 0)
+          while ((receive = recv (this->core_fd_recv, buf, sizeof (buf), 0)) >= 0)
             {
-              nfq_handle_packet(this->handle_recv, buf, receive);
+              nfq_handle_packet (this->handle_recv, buf, receive);
             }
 
-          nfq_destroy_queue(this->q_handle_recv);
-          nfq_close(this->handle_recv);
+          nfq_destroy_queue (this->q_handle_recv);
+          nfq_close (this->handle_recv);
+        }
+
+
+
+      static int callback_helper_send (struct nfq_q_handle *q_handle,
+                                       struct nfgenmsg *nfmsg,
+                                       struct nfq_data *nfa,
+                                       void *context)
+        {
+          return ((Core *) context)->send_callback (q_handle, nfmsg, nfa);
+        }
+
+
+
+      static int callback_helper_recv (struct nfq_q_handle *q_handle,
+                                       struct nfgenmsg *nfmsg,
+                                       struct nfq_data *nfa,
+                                       void *context)
+        {
+          return ((Core *) context)->recv_callback (q_handle, nfmsg, nfa);
         }
 
 
 
       void run ()
         {
+          std::thread send_thread (&Core::run_send_queue, this);
+          std::thread recv_thread (&Core::run_recv_queue, this);
 
-          std::thread send_thread(&Core::run_send_queue, this);
-          std::thread recv_thread(&Core::run_recv_queue, this);
-
-          send_thread.join();
-          recv_thread.join();
-
+          send_thread.join ();
+          recv_thread.join ();
         }
-
-
-
-
-      static int callback_helper_send (struct nfq_q_handle *q_handle,
-                                  struct nfgenmsg *nfmsg,
-                                  struct nfq_data *nfa,
-                                  void *context)
-        {
-          return ((Core *) context)->send_callback (q_handle, nfmsg, nfa);
-        }
-
-      static int callback_helper_recv (struct nfq_q_handle *q_handle,
-                                  struct nfgenmsg *nfmsg,
-                                  struct nfq_data *nfa,
-                                  void *context)
-        {
-          return ((Core *) context)->recv_callback (q_handle, nfmsg, nfa);
-        }
-
   };
+
+
 
 int main (int argc, char *argv[])
   {
+
     if (argc == 2)
       {
-        Core core (argv[1]);
+        Core core (argv[1], 1.0);
+        core.run ();
+      }
+
+    else if (argc == 3)
+      {
+        Core core (argv[1], atof (argv[2]));
         core.run ();
       }
 
     else
       {
-        std::cout << "Usage:" << std::endl << "   ./core <self_ip>" << std::endl;
+        std::cout << "Usage:" << std::endl << "   ./core <self_ip> <alpha>" << std::endl;
       }
 
     return 0;
-  } 
+  }

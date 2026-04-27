@@ -10,6 +10,8 @@
 
 #define MAX_PACKET_SIZE 65536
 
+
+
 class Router : public Middle
   {
     private:
@@ -26,34 +28,37 @@ class Router : public Middle
 
       std::unordered_map <uint32_t, uint32_t> dnat;
 
-      void calculateTCPChecksum(uint8_t* packet, size_t packetLength) {
-        const uint8_t* sourceIP = &packet[12];  // Offset for source IP in IP header
-        const uint8_t* destIP = &packet[16];    // Offset for destination IP in IP header
 
-        uint32_t sum = 0;
 
-        // Pseudo-header: Source IP + Destination IP + Reserved (8 bits) + Protocol (8 bits) + TCP length (16 bits)
-        for (int i = 0; i < 4; ++i) {
-            sum += (static_cast<uint16_t>(sourceIP[i]) << 8) + static_cast<uint16_t>(destIP[i]);
+      void calculateTCPChecksum (uint8_t* packet,
+                                 size_t packetLength)
+        {
+          const uint8_t* sourceIP = &packet[12];  // Offset for source IP in IP header
+          const uint8_t* destIP = &packet[16];    // Offset for destination IP in IP header
+
+          uint32_t sum = 0;
+
+          // Pseudo-header: Source IP + Destination IP + Reserved (8 bits) + Protocol (8 bits) + TCP length (16 bits)
+          for (int i = 0; i < 4; ++i)
+              sum += (static_cast<uint16_t> (sourceIP[i]) << 8) + static_cast<uint16_t> (destIP[i]);
+
+          sum += 6 << 8; // Protocol: 6 for TCP
+          sum += static_cast<uint16_t> (packetLength);
+
+          // TCP header and data
+          for (size_t i = 20; i < packetLength; i += 2)   // Start from offset 20 for TCP header
+              sum += (packet[i] << 8) + packet[i + 1];
+
+          // Add the carry
+          while (sum >> 16)
+              sum = (sum & 0xFFFF) + (sum >> 16);
+
+          uint16_t checksum = static_cast<uint16_t> (~sum);
+          packet[36] = (checksum >> 8) & 0xFF;  // Offset for TCP checksum in TCP header
+          packet[37] = checksum & 0xFF;
         }
 
-        sum += 6 << 8; // Protocol: 6 for TCP
-        sum += static_cast<uint16_t>(packetLength);
 
-        // TCP header and data
-        for (size_t i = 20; i < packetLength; i += 2) {  // Start from offset 20 for TCP header
-            sum += (packet[i] << 8) + packet[i + 1];
-        }
-
-        // Add the carry
-        while (sum >> 16) {
-            sum = (sum & 0xFFFF) + (sum >> 16);
-        }
-
-        uint16_t checksum = static_cast<uint16_t>(~sum);
-        packet[36] = (checksum >> 8) & 0xFF;  // Offset for TCP checksum in TCP header
-        packet[37] = checksum & 0xFF;
-    }
 
     protected:
       void setup_middle ()
@@ -189,9 +194,8 @@ class Router : public Middle
 
               int n = read (this->core_control_fd, &packet_size, sizeof (packet_size));
               if (n <= 0)
-                {
-                  perror ("Failed to read len");
-                }
+                perror ("Failed to read len");
+
               packet_size = ntohl (packet_size);
               std::cout << packet_size << std::endl;
 
@@ -257,12 +261,12 @@ class Router : public Middle
                           (struct sockaddr*) &saddr,
                           sizeof (struct sockaddr));
               if (n < 0)
-                {
-                  this->logger.print ("Failed to send packet", RED, VERBOSE_LOW);
-                }
+                this->logger.print ("Failed to send packet", RED, VERBOSE_LOW);
 
             }
         }
+
+
 
       public:
         Router (bool is_server, char *client_1_ip, char *server_ip = NULL)
@@ -300,6 +304,7 @@ int main (int argc, char *argv[])
         router.run ();
         return 0;
       }
+
     else if (argc == 4 && atoi (argv[1]) == 1)
       {
         Router router (1, argv[2], argv[3]);
@@ -312,5 +317,4 @@ int main (int argc, char *argv[])
     std::cout << " Client:   ./router 0 <client_1_ip>" << std::endl;
     std::cout << " Server:   ./router 1 <client_1_ip> <server_ip>" << std::endl;
     return 0;
-
   }

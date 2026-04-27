@@ -9,11 +9,11 @@ import argparse
 @main_loop_decorator(iterations=15)
 
 def iper3_test(url: str):
-    result = subprocess.run("iperf3 -c 192.168.224.76 --json --connect-timeout 30000" , 
+    result = subprocess.run("iperf3 -c 192.168.224.76 --json --connect-timeout 30000" ,
                             shell=True,
-                            text=True,  
+                            text=True,
                             capture_output=True)
-    
+
     if result.returncode == 0:
         result = json.loads(result.stdout)
 
