@@ -1,4 +1,9 @@
-NOTE - Datasets and results generated for security and performace evaluation are not included in this repository. These datasets and result logs can be shared if required.
+# ViNET
+
+Welcome to the official repository for the paper "ViNET: Connecting the Unconnected using Video over LTE"
+
+> [!NOTE]
+> Results generated for security and performace evaluation are not included in this repository. 
 
 ## Repository Structure
 - `Core` - Contains the implementation of the `Tunnel` application. There are many flavours. We have used `EncryptNonBlock.cpp` in our testing.
@@ -20,13 +25,13 @@ NOTE - Datasets and results generated for security and performace evaluation are
     4. install libnetfilter-queue and libnetfilter-queue-static
     5. To install any other package: `<pkg install PACKAGE_NAME>`
     6. To search any other package : `<pkg search PACKAGE_NAME>`
-  
+
 3. Clone the repo and move the ViNETs code to `/data/local/tmp` of the device.
 4. Compile the code using the following commands
      1. `aarch64-linux-android-g++ ViNET/Core/EncryptNonBlock.cpp -o core -lnetfilter_queue -lssl -lcrypto`
      2. `aarch64-linux-android-g++ ViNET/Middle/Router.cpp -o router -lpthread`
      3. Or use the provided `Makefile`.
-        
+
 5. Turn on WiFi hotspot for one device you want to setup as Android Client. And connect the ViNET client device (laptop) to it using the WiFi.
 6. Turn on the WiFi on the Android Peer and connect it to the internet.
 7. Identify the `rmnet_data{n}` interface which is connected to LTE, will have a IPv6 (Turn of the internet on both the devices to easily identify the interface)
@@ -39,11 +44,11 @@ NOTE - Datasets and results generated for security and performace evaluation are
     2. `ip6tables -t mangle -A OUTPUT -o rmnet_data1{n} -p UDP -j NFQUEUE --queue-num 6`
     3. `iptables -t nat -A POSTROUTING -o wlan0 -j MASQUERADE`
     4. `iptables -A OUTPUT -o wlan0 -p icmp --icmp-type 3 -j REJECT`
-  
+
 10. Run `core` using the command `./core <self_ip>`, here self_ip is the IPv6 assigned to the rmnet_data{n} of the device.
 11. Run `router`
       1. For Android client run `./router <client_ip>`, here client_ip is the IP of the ViNET client device viz. the laptop.
       2. For Android peer run `./router <client_ip> 192.168.0.1`, here client_ip is the IP of the ViNET client device viz. the laptop.
-   
+
 12. Place the ViNET video call from the Andoroid client side and recieve it at the peer side.
 13. Now you should be able to access internet from the ViNET client device viz. the laptop.
