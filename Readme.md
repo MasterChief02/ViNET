@@ -1,54 +1,130 @@
 # ViNET
 
-Welcome to the official repository for the paper "ViNET: Connecting the Unconnected using Video over LTE"
+This repository holds the code for the paper **ViNET: Connecting the Unconnected using Video over LTE**
+
 
 > [!NOTE]
-> Results generated for security and performace evaluation are not included in this repository. 
+> This is the **production** branch. It contains the streamlined source code and testing framework.
+> For the full research codebase — including security analysis, feature extraction, plotting notebooks, and experiment data — see the [`master`](../../tree/master) branch.
+
+
+## Architecture
+
+ViNET deploys two cooperating components on a pair of rooted Android devices:
+
+| Component | Role | Entry Point |
+|-----------|------|-------------|
+| **Core** (Tunnel) | Packet interception via `NFQUEUE`, AES encryption (OpenSSL), and forwarding over a TCP control/data channel | `ViNET/Core/Core.cpp` |
+| **Middle** (Relay) | NAT translation and packet routing between the client network and the internet via raw sockets | `ViNET/Middle/Router.cpp` |
+
+```
+┌──────────┐     WiFi      ┌──────────────────┐    LTE (ViLTE)     ┌──────────────────┐     Internet
+│  Client  │◄────────────► │  Android Client  │◄──────────────────►│  Android Peer    │◄──────────────►
+│ (Laptop) │               │  Core + Router   │                    │  Core + Router   │
+└──────────┘               └──────────────────┘                    └──────────────────┘
+```
+
 
 ## Repository Structure
-- `Core` - Contains the implementation of the `Tunnel` application. There are many flavours. We have used `EncryptNonBlock.cpp` in our testing.
-- `Middle` - Contains the implementatio of the `Relay` application. There are some variations for different applications. We have used `Router.cpp` in our testing.
-- `Common` - Contains some utility code used by both `Tunnel` and `Relay` application e.g. Logger.
-- `Plots` - Contains the code for plotting the graphs for the obtained results from the experiments done with ViNET.
-- `Analysis` - Contains the scripts for security analysis and feature extraction.
-- `Tests` - Contains the scripts for automated testing framework for the ViNET.
-- `Makefile` - Script to compile ViNET's code.
 
-## Instructions to run ViNET
+```
+.
+├── ViNET/
+│   ├── Core/            # Tunnel — interception, encryption, forwarding
+│   ├── Middle/          # Relay  — NAT, routing, raw socket I/O
+│   └── Common/          # Shared utilities (Logger)
+└── Tests/               # Automated testing framework
+```
 
-1. Get rooted devices
 
-2. Installing Netfilter queue
-    1. Install termux on the device
-    2. enable its root-repo and x11-repo
-    3. install apt
-    4. install libnetfilter-queue and libnetfilter-queue-static
-    5. To install any other package: `<pkg install PACKAGE_NAME>`
-    6. To search any other package : `<pkg search PACKAGE_NAME>`
+## Prerequisites
 
-3. Clone the repo and move the ViNETs code to `/data/local/tmp` of the device.
-4. Compile the code using the following commands
-     1. `aarch64-linux-android-g++ ViNET/Core/EncryptNonBlock.cpp -o core -lnetfilter_queue -lssl -lcrypto`
-     2. `aarch64-linux-android-g++ ViNET/Middle/Router.cpp -o router -lpthread`
-     3. Or use the provided `Makefile`.
+1. Two **rooted Android devices** with ViLTE support.
+2. Active **SIM cards** on both devices with a carrier plan that supports ViLTE (Video over LTE) calling.
+3. **Verify video calling works** — place a ViLTE video call between the two devices over the carrier network before proceeding. If this call does not connect, ViNET will not function.
 
-5. Turn on WiFi hotspot for one device you want to setup as Android Client. And connect the ViNET client device (laptop) to it using the WiFi.
-6. Turn on the WiFi on the Android Peer and connect it to the internet.
-7. Identify the `rmnet_data{n}` interface which is connected to LTE, will have a IPv6 (Turn of the internet on both the devices to easily identify the interface)
-8. Add the following `iptable` rules on the Android client
-     1. `ip6tables -t mangle -A INPUT -i rmnet_data{n} -p UDP -j NFQUEUE --queue-num 5`
-     2. `ip6tables -t mangle -A OUTPUT -o rmnet_data{n} -p UDP -j NFQUEUE --queue-num 6`
-     3. If you want to use ping also then add `iptables -A OUTPUT -p icmp -s <CLIENT_DEVICE_WIFI_IP> -j DROP`
-9. Add the following `iptable` rules on the Android Peer.
-    1. `ip6tables -t mangle -A INPUT -i rmnet_data{n} -p UDP -j NFQUEUE --queue-num 5`
-    2. `ip6tables -t mangle -A OUTPUT -o rmnet_data1{n} -p UDP -j NFQUEUE --queue-num 6`
-    3. `iptables -t nat -A POSTROUTING -o wlan0 -j MASQUERADE`
-    4. `iptables -A OUTPUT -o wlan0 -p icmp --icmp-type 3 -j REJECT`
 
-10. Run `core` using the command `./core <self_ip>`, here self_ip is the IPv6 assigned to the rmnet_data{n} of the device.
-11. Run `router`
-      1. For Android client run `./router <client_ip>`, here client_ip is the IP of the ViNET client device viz. the laptop.
-      2. For Android peer run `./router <client_ip> 192.168.0.1`, here client_ip is the IP of the ViNET client device viz. the laptop.
+## Quick Start
 
-12. Place the ViNET video call from the Andoroid client side and recieve it at the peer side.
-13. Now you should be able to access internet from the ViNET client device viz. the laptop.
+### 1. Device Setup
+
+Install [Termux](https://termux.dev) on both devices, then enable the required repos and install dependencies:
+
+```bash
+pkg install root-repo x11-repo
+pkg install libnetfilter-queue libnetfilter-queue-static
+```
+
+### 2. Build
+
+Clone the repo and push the source to `/data/local/tmp` on each device. Compile with:
+
+```bash
+aarch64-linux-android-g++ ViNET/Core/Core.cpp -o core -lnetfilter_queue -lssl -lcrypto
+aarch64-linux-android-g++ ViNET/Middle/Router.cpp -o router -lpthread
+```
+
+### 3. Network Topology
+
+- Enable **WiFi hotspot** on the Android Client. Connect the client laptop to it.
+- Connect the **Android Peer** to the internet via WiFi.
+- Identify the LTE interface on each device — look for the `rmnet_data<n>` interface carrying an IPv6 address:
+
+```bash
+ip -6 addr show | grep rmnet_data
+```
+
+### 4. Configure iptables
+
+**Android Client** — replace `<n>` with your interface number from the previous step:
+
+```bash
+ip6tables -t mangle -A INPUT  -i rmnet_data<n> -p UDP -j NFQUEUE --queue-num 5
+ip6tables -t mangle -A OUTPUT -o rmnet_data<n> -p UDP -j NFQUEUE --queue-num 6
+```
+
+**Android Peer:**
+
+```bash
+ip6tables -t mangle -A INPUT  -i rmnet_data<n> -p UDP -j NFQUEUE --queue-num 5
+ip6tables -t mangle -A OUTPUT -o rmnet_data<n> -p UDP -j NFQUEUE --queue-num 6
+
+# wlan0 is the Peer's WiFi interface connected to the internet.
+# MASQUERADE rewrites the source IP of tunneled packets so they appear to
+# originate from the Peer, allowing return traffic to route back correctly.
+iptables -t nat -A POSTROUTING -o wlan0 -j MASQUERADE
+
+# Suppress ICMP "destination unreachable" responses on the WiFi interface
+# to prevent the kernel from interfering with tunneled connections.
+iptables -A OUTPUT -o wlan0 -p icmp --icmp-type 3 -j REJECT
+```
+
+### 5. Launch
+
+Start Core on **both** devices (use each device's own `rmnet_data<n>` IPv6 address):
+
+```bash
+./core <self_ipv6>
+```
+
+Start the Router — replace `<laptop_ip>` with the laptop's WiFi IP:
+
+```bash
+# Android Client (mode 0 = client)
+./router 0 <laptop_ip>
+
+# Android Peer (mode 1 = server)
+# The last argument is the Peer's WiFi gateway IP — the Router uses it for
+# source NAT so that tunneled packets are routed correctly to the internet.
+# Find it with: ip route show default dev wlan0
+./router 1 <laptop_ip> 192.168.0.1
+```
+
+### 6. Connect
+
+Initiate a ViLTE video call from the Android Client to the Android Peer. Once the call is connected, the laptop has internet access through the tunnel.
+
+
+## Testing
+
+See [`Tests/README.md`](Tests/README.md) for the automated testing framework, covering web browsing, throughput (iperf3), ViLTE analysis, file transfers, and application-level benchmarks.
