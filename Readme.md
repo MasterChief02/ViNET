@@ -1,9 +1,9 @@
 # ViNET
----
 
-Welcome to the official repository of ViNET
+Welcome to the official repository for the paper "ViNET: Connecting the Unconnected using Video over LTE"
 
-NOTE - Datasets and results generated for security and performace evaluation are not included in this repository. These datasets and result logs can be shared if required.
+> [!NOTE]
+> Results generated for security and performace evaluation are not included in this repository. 
 
 ## Repository Structure
 - `Core` - Contains the implementation of the `Tunnel` application. There are many flavours. We have used `EncryptNonBlock.cpp` in our testing.
