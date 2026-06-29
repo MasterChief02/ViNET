@@ -1,7 +1,7 @@
 # ViNET
 ---
 
-Welcome to the official repor
+Welcome to the official repository of ViNET
 
 NOTE - Datasets and results generated for security and performace evaluation are not included in this repository. These datasets and result logs can be shared if required.
 
