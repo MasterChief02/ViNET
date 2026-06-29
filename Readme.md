@@ -1,54 +1,165 @@
-# ViNET
+# ViNET — Research Branch
 
-Welcome to the official repository for the paper "ViNET: Connecting the Unconnected using Video over LTE"
+This branch contains the full research codebase for the paper *"ViNET: Connecting the Unconnected using Video over LTE"*, including security analysis, ML-based traffic classification, and experiment data.
 
 > [!NOTE]
-> Results generated for security and performace evaluation are not included in this repository. 
+> For the streamlined source code and deployment instructions, see the [`PROD`](../../tree/PROD) branch.
+
 
 ## Repository Structure
-- `Core` - Contains the implementation of the `Tunnel` application. There are many flavours. We have used `EncryptNonBlock.cpp` in our testing.
-- `Middle` - Contains the implementatio of the `Relay` application. There are some variations for different applications. We have used `Router.cpp` in our testing.
-- `Common` - Contains some utility code used by both `Tunnel` and `Relay` application e.g. Logger.
-- `Plots` - Contains the code for plotting the graphs for the obtained results from the experiments done with ViNET.
-- `Analysis` - Contains the scripts for security analysis and feature extraction.
-- `Tests` - Contains the scripts for automated testing framework for the ViNET.
-- `Makefile` - Script to compile ViNET's code.
 
-## Instructions to run ViNET
+```
+.
+├── Core/                # Tunnel variants (see below)
+├── Middle/              # Relay variants
+├── Common/              # Shared utilities
+├── Analysis/            # Security analysis & feature extraction
+├── Data/                # Extracted feature CSVs
+├── Tests/               # Automated testing framework
+└── Makefile             # Build all variants
+```
 
-1. Get rooted devices
 
-2. Installing Netfilter queue
-    1. Install termux on the device
-    2. enable its root-repo and x11-repo
-    3. install apt
-    4. install libnetfilter-queue and libnetfilter-queue-static
-    5. To install any other package: `<pkg install PACKAGE_NAME>`
-    6. To search any other package : `<pkg search PACKAGE_NAME>`
+## Core Variants
 
-3. Clone the repo and move the ViNETs code to `/data/local/tmp` of the device.
-4. Compile the code using the following commands
-     1. `aarch64-linux-android-g++ ViNET/Core/EncryptNonBlock.cpp -o core -lnetfilter_queue -lssl -lcrypto`
-     2. `aarch64-linux-android-g++ ViNET/Middle/Router.cpp -o router -lpthread`
-     3. Or use the provided `Makefile`.
+The `Core/` directory contains multiple tunnel implementations used across different experiments. Each variant builds on the base tunnel with a specific behavior:
 
-5. Turn on WiFi hotspot for one device you want to setup as Android Client. And connect the ViNET client device (laptop) to it using the WiFi.
-6. Turn on the WiFi on the Android Peer and connect it to the internet.
-7. Identify the `rmnet_data{n}` interface which is connected to LTE, will have a IPv6 (Turn of the internet on both the devices to easily identify the interface)
-8. Add the following `iptable` rules on the Android client
-     1. `ip6tables -t mangle -A INPUT -i rmnet_data{n} -p UDP -j NFQUEUE --queue-num 5`
-     2. `ip6tables -t mangle -A OUTPUT -o rmnet_data{n} -p UDP -j NFQUEUE --queue-num 6`
-     3. If you want to use ping also then add `iptables -A OUTPUT -p icmp -s <CLIENT_DEVICE_WIFI_IP> -j DROP`
-9. Add the following `iptable` rules on the Android Peer.
-    1. `ip6tables -t mangle -A INPUT -i rmnet_data{n} -p UDP -j NFQUEUE --queue-num 5`
-    2. `ip6tables -t mangle -A OUTPUT -o rmnet_data1{n} -p UDP -j NFQUEUE --queue-num 6`
-    3. `iptables -t nat -A POSTROUTING -o wlan0 -j MASQUERADE`
-    4. `iptables -A OUTPUT -o wlan0 -p icmp --icmp-type 3 -j REJECT`
+| File | Description |
+|------|-------------|
+| `Core.cpp` | Base tunnel — unencrypted packet interception and forwarding |
+| `Encrypt.cpp` | Adds AES-CBC encryption via OpenSSL |
+| `Encrypt.GCM.cpp` | Uses AES-GCM (authenticated encryption) instead of CBC |
+| `EncryptNonBlock.cpp` | Non-blocking I/O variant of the encrypted tunnel — **used in paper experiments** |
+| `EncryptDrop.cpp` | Encrypted tunnel with controlled packet drop simulation |
+| `EncryptFMQ.cpp` | Encrypted tunnel using a fast message queue for inter-thread communication |
+| `EncryptReplay.cpp` | Encrypted tunnel with packet replay capability |
+| `EncryptReplayMap.cpp` | Replay variant using a map-based lookup for replayed packets |
+| `CoreConstString.cpp` | Tunnel that appends a constant string payload (used for testing overhead) |
+| `CoreMultiThread.cpp` | Multi-threaded tunnel with separate send/receive threads |
 
-10. Run `core` using the command `./core <self_ip>`, here self_ip is the IPv6 assigned to the rmnet_data{n} of the device.
-11. Run `router`
-      1. For Android client run `./router <client_ip>`, here client_ip is the IP of the ViNET client device viz. the laptop.
-      2. For Android peer run `./router <client_ip> 192.168.0.1`, here client_ip is the IP of the ViNET client device viz. the laptop.
+### Building All Variants
 
-12. Place the ViNET video call from the Andoroid client side and recieve it at the peer side.
-13. Now you should be able to access internet from the ViNET client device viz. the laptop.
+The included `Makefile` builds the primary binaries:
+
+```bash
+make
+```
+
+This compiles:
+- `core` from `EncryptNonBlock.cpp`
+- `core_append` from `CoreConstString.cpp`
+- `netcat` from `Middle/Netcat.cpp`
+- `router` from `Middle/Router.cpp`
+
+
+## Security Analysis (`Analysis/`)
+
+Scripts for evaluating whether a network observer can distinguish ViNET-tunneled traffic from standard ViLTE video calls.
+
+### Dependencies
+
+```bash
+pip install -r Analysis/requirements.txt
+```
+
+For the Rust-based tools (`mpt_rs` and `rtp_loss`), build with:
+
+```bash
+cd Analysis/mpt_rs && cargo build --release
+cd Analysis/rtp_loss && cargo build --release
+```
+
+### Pipeline
+
+The analysis follows a three-stage pipeline:
+
+#### 1. PCAP Chunking
+
+Split raw packet captures into fixed-duration windows (10s–60s) for time-windowed analysis:
+
+```bash
+# Place .pcap files in the working directory, then:
+bash Analysis/chunking.sh
+```
+
+This uses `editcap` to split each `.pcap` into 10-second chunks.
+
+#### 2. Feature Extraction
+
+Extract statistical features from chunked PCAPs. The primary tool is `mpt_rs` (Rust), which computes packet-level and payload-level features per chunk and outputs CSV files.
+
+Run the full extraction pipeline across all ISPs and chunk lengths:
+
+```bash
+cd Data/forbidden_bit_60s
+bash ../../Analysis/data_scripts/run_analysis.sh
+```
+
+This expects the following directory layout under the working directory:
+
+```
+<working_dir>/
+├── airtel/
+│   ├── vilte/    # .pcap files from standard ViLTE calls
+│   └── vinet/    # .pcap files from ViNET-tunneled calls
+├── jio/
+│   ├── vilte/
+│   └── vinet/
+└── vi/
+    ├── vilte/
+    └── vinet/
+```
+
+There are also Python-based extraction scripts for additional features:
+
+| Script | Purpose |
+|--------|---------|
+| `feature_extraction.py` | Extracts per-packet size, timing, and directionality features from IPv6/UDP PCAPs |
+| `new_features.py` | Extended feature set — STUN/DTLS filtering, histogram bins, kurtosis, skew, inter-arrival statistics |
+| `entropy.py` | Computes per-packet Shannon entropy and byte frequency distributions |
+| `rtcp_jitter_calculation.py` | Extracts RTCP jitter and packet-type ratios from captured traffic |
+
+#### 3. Model Training & Classification
+
+Train classifiers (XGBoost, Random Forest, Decision Tree) to distinguish ViLTE from ViNET traffic using stratified 7-fold cross-validation:
+
+```bash
+python Analysis/model_training.py
+```
+
+This produces:
+- ROC curves and AUC scores per ISP and chunk length
+- Feature importance rankings
+- Confusion matrices and precision/recall/F1 metrics
+
+### Rust Tools
+
+| Tool | Purpose |
+|------|---------|
+| `mpt_rs` | High-performance PCAP feature extractor — computes packet-level and payload-level stats, outputs CSV |
+| `rtp_loss` | RTP packet loss and sequence analysis from PCAPs |
+
+
+## Experiment Data (`Data/`)
+
+Pre-extracted feature CSVs ready for model training, organized by experiment and ISP:
+
+```
+Data/
+├── forbidden_bit_60s/         # 60-second capture experiments
+│   └── features/
+│       ├── airtel/            # Airtel carrier
+│       │   ├── chunks_10s/    # Features at 10s granularity
+│       │   ├── chunks_10s_pl/ # Payload-level features at 10s
+│       │   ├── ...
+│       │   └── chunks_60s_pl/
+│       ├── jio/               # Jio carrier
+│       └── vi/                # Vi carrier
+└── one_transfer/              # Single file-transfer experiments
+    └── features/
+        └── jio/
+```
+
+Each directory contains paired CSVs: `<isp>_vilte.csv` (label 0) and `<isp>_vinet.csv` (label 1).
+
+
